@@ -1,0 +1,3095 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Co-Dare｜營養師後台</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js" onerror="window._fbFailed=true"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js" onerror="window._fbFailed=true"></script>
+<script>
+let _db = null;
+const _cache = {};
+
+// 安全初始化 Firebase（若 SDK 載入失敗則靜默降級到 localStorage）
+(function initFirebase() {
+  try {
+    if (typeof firebase === 'undefined') throw new Error('SDK not loaded');
+    firebase.initializeApp({
+      apiKey: "AIzaSyActPbd2RRGAE4Y5UgZbKKjIUQmGHOqKPY",
+      authDomain: "codare-8aba6.firebaseapp.com",
+      projectId: "codare-8aba6",
+      storageBucket: "codare-8aba6.firebasestorage.app",
+      messagingSenderId: "259025105764",
+      appId: "1:259025105764:web:59a58f97afc6461288c071",
+      databaseURL: "https://codare-8aba6-default-rtdb.asia-southeast1.firebasedatabase.app"
+    });
+    _db = firebase.database();
+    console.log('✅ Firebase 連線成功');
+  } catch(e) {
+    console.warn('⚠️ Firebase 未連線，使用 localStorage 模式：', e.message);
+    _db = null;
+  }
+})();
+
+function gs(key) {
+  if (_cache[key] !== undefined) return _cache[key];
+  try { return JSON.parse(localStorage.getItem('cd_' + key)); } catch { return null; }
+}
+function ss(key, val) {
+  _cache[key] = val;
+  try { localStorage.setItem('cd_' + key, JSON.stringify(val)); } catch {}
+  if (_db) {
+    _db.ref('cd/' + key.replace(/\//g,'_sl_')).set(val === null ? null : val)
+      .catch(e => console.warn('Firebase write error:', e));
+  }
+}
+async function warmCache() {
+  if (!_db) return;
+  try {
+    const snap = await _db.ref('cd').once('value');
+    if (snap.exists()) {
+      snap.forEach(child => {
+        const k = child.key.replace(/_sl_/g, '/');
+        _cache[k] = child.val();
+        try { localStorage.setItem('cd_' + k, JSON.stringify(child.val())); } catch {}
+      });
+    }
+    console.log('✅ 資料同步完成');
+  } catch(e) { console.warn('Cache warm failed, using localStorage:', e); }
+}
+async function saveDynUser(phone, data) {
+  _cache['dynuser_' + phone] = data;
+  try { localStorage.setItem('cd_dynuser_' + phone, JSON.stringify(data)); } catch {}
+  if (_db) {
+    try { await _db.ref('cd/dynuser_' + phone).set(data); } catch(e) { console.warn(e); }
+  }
+}
+async function loadDynUser(phone) {
+  if (_db) {
+    try {
+      const snap = await _db.ref('cd/dynuser_' + phone).once('value');
+      if (snap.exists()) return snap.val();
+    } catch(e) {}
+  }
+  try { return JSON.parse(localStorage.getItem('cd_dynuser_' + phone)); } catch {}
+  return null;
+}
+</script>
+<style>
+:root {
+  --teal: #0d9488;
+  --teal-light: #ccfbf1;
+  --teal-dark: #0f766e;
+  --teal-mid: #14b8a6;
+  --amber: #f59e0b;
+  --amber-light: #fef3c7;
+  --red: #ef4444;
+  --red-light: #fee2e2;
+  --blue: #3b82f6;
+  --blue-light: #eff6ff;
+  --green: #22c55e;
+  --green-light: #dcfce7;
+  --g0: #f8fafc; --g1: #f1f5f9; --g2: #e2e8f0;
+  --g3: #cbd5e1; --g4: #94a3b8; --g5: #64748b;
+  --g6: #475569; --g7: #334155; --g8: #1e293b; --g9: #0f172a;
+  --r: 10px; --shadow: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Noto Sans TC', sans-serif; background: var(--g0); color: var(--g8); font-size: 14px; line-height: 1.6; }
+
+/* ── LOGIN ── */
+#login-screen {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #0f766e 0%, #134e4a 100%); padding: 24px;
+}
+.login-box {
+  background: #fff; border-radius: 20px; padding: 40px 36px;
+  width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+}
+.login-logo { font-size: 40px; margin-bottom: 6px; }
+.login-title { font-size: 22px; font-weight: 900; color: var(--teal-dark); margin-bottom: 4px; }
+.login-sub { font-size: 13px; color: var(--g4); margin-bottom: 32px; }
+.fl { margin-bottom: 16px; }
+.fl label { display: block; font-size: 12px; font-weight: 700; color: var(--g5); margin-bottom: 5px; letter-spacing: 0.5px; text-transform: uppercase; }
+.fl input { width: 100%; padding: 11px 14px; border: 1.5px solid var(--g2); border-radius: 8px; font-size: 14px; font-family: inherit; background: var(--g0); outline: none; transition: border-color 0.2s; }
+.fl input:focus { border-color: var(--teal); background: #fff; }
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-right: 56px; }
+.pw-eye { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; font-size: 12px; color: var(--teal); cursor: pointer; font-weight: 700; font-family: inherit; }
+.btn-login { width: 100%; padding: 13px; background: var(--teal); color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; font-family: inherit; cursor: pointer; transition: background 0.2s; }
+.btn-login:hover { background: var(--teal-dark); }
+.login-err { color: var(--red); font-size: 13px; margin-top: 10px; text-align: center; display: none; }
+.login-hint-box { margin-top: 20px; padding: 12px 14px; background: var(--g0); border-radius: 8px; font-size: 12px; color: var(--g4); }
+
+/* ── APP SHELL ── */
+#app { display: none; min-height: 100vh; }
+.sidebar {
+  position: fixed; left: 0; top: 0; bottom: 0; width: 220px;
+  background: var(--g9); display: flex; flex-direction: column; z-index: 100;
+}
+.sb-brand { padding: 22px 20px 18px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.sb-brand-name { font-size: 16px; font-weight: 900; color: #fff; }
+.sb-brand-sub { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+.sb-user { padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.sb-user-name { font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.9); }
+.sb-user-role { font-size: 11px; color: rgba(255,255,255,0.4); }
+.sb-nav { flex: 1; padding: 12px 10px; overflow-y: auto; }
+.sb-section { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.25); letter-spacing: 1px; padding: 12px 10px 6px; text-transform: uppercase; }
+.sb-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: 8px; cursor: pointer; color: rgba(255,255,255,0.55);
+  font-size: 13px; font-weight: 500; transition: all 0.15s; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; font-family: inherit;
+}
+.sb-item:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85); }
+.sb-item.active { background: var(--teal); color: #fff; }
+.sb-item-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
+.sb-badge { margin-left: auto; background: var(--red); color: #fff; border-radius: 10px; font-size: 10px; font-weight: 700; padding: 1px 6px; min-width: 18px; text-align: center; }
+.sb-bottom { padding: 12px 10px; border-top: 1px solid rgba(255,255,255,0.06); }
+.btn-logout-sb { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 8px; color: rgba(255,255,255,0.4); font-size: 13px; cursor: pointer; border: none; background: none; font-family: inherit; width: 100%; transition: all 0.15s; }
+.btn-logout-sb:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
+
+.main { margin-left: 220px; min-height: 100vh; }
+.topbar { background: #fff; border-bottom: 1px solid var(--g2); padding: 0 28px; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 50; }
+.topbar-title { font-size: 16px; font-weight: 700; color: var(--g8); }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.content { padding: 28px; }
+
+/* ── CARDS & LAYOUT ── */
+.page-header { margin-bottom: 24px; }
+.page-header h1 { font-size: 22px; font-weight: 900; color: var(--g9); }
+.page-header p { font-size: 13px; color: var(--g4); margin-top: 3px; }
+.card { background: #fff; border-radius: var(--r); border: 1px solid var(--g2); padding: 20px; margin-bottom: 16px; }
+.card-title { font-size: 14px; font-weight: 700; color: var(--g7); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+
+/* STAT BOXES */
+.stat-box { background: #fff; border-radius: var(--r); border: 1px solid var(--g2); padding: 18px 20px; }
+.stat-val { font-size: 28px; font-weight: 900; color: var(--g9); line-height: 1; }
+.stat-label { font-size: 12px; color: var(--g4); margin-top: 4px; }
+.stat-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; margin-top: 6px; }
+.stat-badge.urgent { background: var(--red-light); color: var(--red); }
+.stat-badge.ok { background: var(--green-light); color: #15803d; }
+
+/* TABLES */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { padding: 9px 12px; text-align: left; font-size: 11px; font-weight: 700; color: var(--g4); border-bottom: 1px solid var(--g2); letter-spacing: 0.5px; text-transform: uppercase; background: var(--g0); }
+.tbl td { padding: 12px 12px; border-bottom: 1px solid var(--g1); vertical-align: middle; }
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr:hover td { background: var(--g0); }
+.tbl tr.clickable { cursor: pointer; }
+.pill { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+.pill.active { background: var(--green-light); color: #15803d; }
+.pill.pending { background: var(--amber-light); color: #92400e; }
+.pill.ended { background: var(--g1); color: var(--g4); }
+.pill.urgent { background: var(--red-light); color: var(--red); }
+
+/* BUTTONS */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+.btn-teal { background: var(--teal); color: #fff; }
+.btn-teal:hover { background: var(--teal-dark); }
+.btn-outline { background: #fff; color: var(--g6); border: 1.5px solid var(--g2); }
+.btn-outline:hover { border-color: var(--g4); color: var(--g8); }
+.btn-red { background: var(--red); color: #fff; }
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* FORM ELEMENTS */
+.fld { margin-bottom: 14px; }
+.fld label { display: block; font-size: 12px; font-weight: 700; color: var(--g5); margin-bottom: 5px; letter-spacing: 0.4px; }
+.fld input, .fld textarea, .fld select {
+  width: 100%; padding: 9px 12px; border: 1.5px solid var(--g2); border-radius: 8px;
+  font-size: 13px; font-family: inherit; background: #fff; outline: none; transition: border-color 0.2s; color: var(--g8);
+}
+.fld input:focus, .fld textarea:focus, .fld select:focus { border-color: var(--teal); }
+.fld textarea { resize: vertical; min-height: 80px; }
+.fld-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.fld-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+/* MODAL */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal { background: #fff; border-radius: 14px; width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+.modal-header { padding: 20px 24px 0; display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.modal-header h2 { font-size: 17px; font-weight: 700; }
+.modal-close { background: none; border: none; font-size: 20px; cursor: pointer; color: var(--g4); padding: 0 4px; line-height: 1; }
+.modal-body { padding: 0 24px 20px; }
+.modal-footer { padding: 14px 24px; border-top: 1px solid var(--g2); display: flex; justify-content: flex-end; gap: 8px; }
+
+/* STUDENT CARD */
+.student-row { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--g1); cursor: pointer; }
+.student-row:last-child { border-bottom: none; }
+.student-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--teal-light); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: var(--teal-dark); flex-shrink: 0; }
+.student-info { flex: 1; min-width: 0; }
+.student-name { font-size: 14px; font-weight: 700; }
+.student-meta { font-size: 12px; color: var(--g4); }
+.student-actions { display: flex; gap: 6px; align-items: center; }
+
+/* FOOD DIARY VIEW */
+.meal-block { margin-bottom: 18px; }
+.meal-block-title { font-size: 12px; font-weight: 700; color: var(--g5); background: var(--g0); padding: 5px 10px; border-radius: 6px; margin-bottom: 8px; display: inline-block; }
+.meal-text { font-size: 13px; color: var(--g7); line-height: 1.7; padding: 8px 0; }
+.meal-text.empty { color: var(--g3); font-style: italic; }
+.photo-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.photo-thumb { width: 90px; height: 90px; border-radius: 8px; object-fit: cover; border: 1px solid var(--g2); cursor: pointer; transition: opacity 0.15s; }
+.photo-thumb:hover { opacity: 0.85; }
+.life-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.life-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: var(--g0); border: 1px solid var(--g2); border-radius: 20px; font-size: 12px; color: var(--g6); }
+
+/* FEEDBACK BOX */
+.feedback-box { background: var(--teal-light); border-left: 3px solid var(--teal); border-radius: 8px; padding: 12px 14px; font-size: 13px; color: var(--teal-dark); }
+.feedback-input { width: 100%; padding: 12px; border: 1.5px solid var(--g2); border-radius: 10px; font-size: 13px; font-family: inherit; outline: none; resize: none; min-height: 100px; transition: border-color 0.2s; }
+.feedback-input:focus { border-color: var(--teal); }
+
+/* WEEK PLAN BADGES */
+.cpvfdo-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.cpv-badge { padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; }
+.cpv-C { background: #fef3c7; color: #92400e; }
+.cpv-P { background: #ffe4e6; color: #9f1239; }
+.cpv-V { background: #dcfce7; color: #166534; }
+.cpv-F { background: #fce7f3; color: #9d174d; }
+.cpv-D { background: #e0f2fe; color: #075985; }
+.cpv-O { background: #f5f3ff; color: #5b21b6; }
+
+/* DAY NAV */
+.day-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+.day-chip { padding: 6px 14px; border-radius: 20px; border: 1.5px solid var(--g2); background: #fff; font-size: 12px; cursor: pointer; font-family: inherit; font-weight: 500; transition: all 0.15s; white-space: nowrap; }
+.day-chip.active { background: var(--teal); border-color: var(--teal); color: #fff; }
+.day-chip.has-data { border-color: var(--teal-mid); color: var(--teal-dark); }
+.day-chip.notified::after { content: '●'; color: var(--red); font-size: 8px; vertical-align: super; margin-left: 2px; }
+
+/* MENU EDITOR */
+.menu-day-editor { border: 1px solid var(--g2); border-radius: 10px; overflow: hidden; margin-bottom: 10px; }
+.menu-day-header { background: var(--g0); padding: 10px 16px; font-size: 13px; font-weight: 700; color: var(--g7); display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--g2); }
+.menu-day-body { padding: 12px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.menu-meal-label { font-size: 11px; font-weight: 700; color: var(--g4); margin-bottom: 4px; }
+
+/* PHOTO LIGHTBOX */
+.lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 300; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.lightbox img { max-width: 92vw; max-height: 88vh; border-radius: 8px; object-fit: contain; }
+
+/* TOAST */
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--g9); color: #fff; padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 500; z-index: 9999; opacity: 0; transform: translateY(8px); transition: all 0.3s; white-space: nowrap; pointer-events: none; }
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* NOTICE */
+.notice { padding: 12px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; display: flex; gap: 8px; align-items: flex-start; }
+.notice.amber { background: var(--amber-light); border-left: 3px solid var(--amber); color: #92400e; }
+.notice.blue { background: var(--blue-light); border-left: 3px solid var(--blue); color: #1e40af; }
+.notice.teal { background: var(--teal-light); border-left: 3px solid var(--teal); color: var(--teal-dark); }
+
+/* SEARCH */
+.search-input { padding: 8px 14px; border: 1.5px solid var(--g2); border-radius: 8px; font-size: 13px; font-family: inherit; outline: none; width: 220px; transition: border-color 0.2s; }
+.search-input:focus { border-color: var(--teal); }
+
+/* DIVIDER */
+.divider { height: 1px; background: var(--g2); margin: 16px 0; }
+.hidden { display: none !important; }
+.text-muted { color: var(--g4); font-size: 12px; }
+.fw7 { font-weight: 700; }
+.empty-placeholder { text-align: center; padding: 40px 20px; color: var(--g3); }
+.empty-placeholder .ei { font-size: 36px; margin-bottom: 10px; }
+.empty-placeholder p { font-size: 13px; }
+
+/* INTAKE CARD */
+.intake-tab-row { display:flex; gap:0; margin-bottom:20px; border-bottom:2px solid var(--g2); }
+.intake-tab { padding:10px 18px; border:none; background:none; font-family:inherit; font-size:13px; font-weight:600; color:var(--g4); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; transition:all 0.15s; }
+.intake-tab.active { color:var(--teal); border-bottom-color:var(--teal); }
+.intake-tab:hover { color:var(--g7); }
+.intake-section-title { font-size:11px; font-weight:700; letter-spacing:0.8px; text-transform:uppercase; color:var(--teal); margin:16px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--teal-light); }
+.intake-row { display:flex; gap:10px; align-items:flex-start; padding:9px 0; border-bottom:1px solid var(--g1); font-size:13px; }
+.intake-row:last-child { border-bottom:none; }
+.intake-label { color:var(--g5); min-width:180px; flex-shrink:0; line-height:1.5; padding-top:1px; }
+.intake-val { color:var(--g8); flex:1; font-weight:500; line-height:1.6; }
+.intake-val.empty { color:var(--g3); font-weight:400; font-style:italic; }
+.intake-tag { display:inline-block; background:var(--teal-light); color:var(--teal-dark); border-radius:4px; padding:1px 8px; font-size:11px; font-weight:700; margin-right:4px; margin-bottom:3px; }
+.intake-tag.warn { background:var(--red-light); color:var(--red); }
+.back-link { display:inline-flex; align-items:center; gap:5px; color:var(--teal); font-size:13px; font-weight:600; cursor:pointer; background:none; border:none; font-family:inherit; margin-bottom:18px; padding:0; }
+.back-link:hover { color:var(--teal-dark); }
+/* ── MOBILE BOTTOM NAV ── */
+@media (max-width: 768px) {
+  .sidebar { display: none !important; }
+  .main { margin-left: 0 !important; }
+  .topbar { padding: 0 16px; }
+  .content { padding: 16px; padding-bottom: 80px; }
+  .bottom-nav {
+    display: flex !important;
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+    background: var(--g9); border-top: 1px solid rgba(255,255,255,0.08);
+    height: 60px; align-items: stretch;
+  }
+  .bn-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; color: rgba(255,255,255,0.45); font-size: 9px; font-weight: 600;
+    cursor: pointer; border: none; background: none; font-family: inherit;
+    padding: 6px 2px; transition: color 0.15s; position: relative;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .bn-item.active { color: var(--teal); }
+  .bn-item-icon { font-size: 20px; line-height: 1; }
+  .bn-badge {
+    position: absolute; top: 4px; right: calc(50% - 14px);
+    background: var(--red); color: #fff; border-radius: 10px;
+    font-size: 9px; font-weight: 700; padding: 1px 5px; min-width: 16px; text-align: center;
+  }
+  /* More menu overlay */
+  .more-menu {
+    position: fixed; bottom: 60px; left: 0; right: 0; z-index: 190;
+    background: var(--g9); border-top: 1px solid rgba(255,255,255,0.08);
+    padding: 8px 0; display: none;
+  }
+  .more-menu.open { display: block; }
+  .mm-item {
+    display: flex; align-items: center; gap: 14px; padding: 13px 24px;
+    color: rgba(255,255,255,0.7); font-size: 14px; cursor: pointer;
+    border: none; background: none; font-family: inherit; width: 100%; text-align: left;
+  }
+  .mm-item.active { color: var(--teal); background: rgba(255,255,255,0.04); }
+  .mm-item-icon { font-size: 20px; width: 24px; text-align: center; }
+}
+@media (min-width: 769px) {
+  .bottom-nav { display: none !important; }
+  .more-menu { display: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN ══ -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">🦁</div>
+    <div class="login-title">Co-Dare 管理後台</div>
+    <div class="login-sub">營養師專屬系統</div>
+    <div class="fl">
+      <label>帳號</label>
+      <input type="text" id="rd-id" placeholder="輸入帳號" autocomplete="username">
+    </div>
+    <div class="fl">
+      <label>密碼</label>
+      <div class="pw-wrap">
+        <input type="password" id="rd-pw" placeholder="輸入密碼" autocomplete="current-password">
+        <button class="pw-eye" onclick="toggleLoginPw()">顯示</button>
+      </div>
+    </div>
+    <button class="btn-login" onclick="doRdLogin()">登入後台</button>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:12px">
+      <input type="checkbox" id="rd-keep" style="width:17px;height:17px;accent-color:var(--teal);cursor:pointer;flex-shrink:0">
+      <label for="rd-keep" style="font-size:14px;color:var(--g6);cursor:pointer;user-select:none">維持登入</label>
+    </div>
+    <div class="login-err" id="rd-err">帳號或密碼錯誤</div>
+  </div>
+</div>
+
+<!-- ══ APP ══ -->
+<div id="app">
+  <aside class="sidebar">
+    <div class="sb-brand">
+      <div class="sb-brand-name">🦁 Co-Dare</div>
+      <div class="sb-brand-sub">營養師管理後台</div>
+    </div>
+    <div class="sb-user">
+      <div class="sb-user-name" id="sb-rdname">—</div>
+      <div class="sb-user-role">營養師</div>
+    </div>
+    <div class="sb-nav">
+      <div class="sb-section">主要功能</div>
+      <button class="sb-item active" id="nav-dashboard" onclick="showSection('dashboard')">
+        <span class="sb-item-icon">🏠</span> 總覽
+      </button>
+      <button class="sb-item" id="nav-feedback" onclick="showSection('feedback')">
+        <span class="sb-item-icon">🍱</span> 飲食回覆
+        <span class="sb-badge" id="badge-feedback">0</span>
+      </button>
+      <button class="sb-item" id="nav-students" onclick="showSection('students')">
+        <span class="sb-item-icon">👥</span> 學員管理
+      </button>
+      <div class="sb-section">課程工具</div>
+      <button class="sb-item" id="nav-weekplan" onclick="showSection('weekplan')">
+        <span class="sb-item-icon">📋</span> 週計畫設定
+      </button>
+      <button class="sb-item" id="nav-bodytrack" onclick="showSection('bodytrack')" style="position:relative">
+        <span class="sb-item-icon">⚖️</span> 體態追蹤
+        <span class="sb-badge" id="badge-bodytrack" style="display:none">0</span>
+      </button>
+      <button class="sb-item" id="nav-menu" onclick="showSection('menu')">
+        <span class="sb-item-icon">🥗</span> 菜單管理
+      </button>
+      <button class="sb-item" id="nav-materials" onclick="showSection('materials')">
+        <span class="sb-item-icon">📚</span> 教材管理
+      </button>
+      <div id="sb-admin-section" style="display:none">
+        <div class="sb-section">系統管理</div>
+        <button class="sb-item" id="nav-accounts" onclick="showSection('accounts')">
+          <span class="sb-item-icon">🔐</span> 帳號管理
+        </button>
+      </div>
+    </div>
+    <div class="sb-bottom">
+      <button class="btn-logout-sb" onclick="doRdLogout()">🚪 登出</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="topbar-title" id="topbar-title">總覽</div>
+      <div class="topbar-actions">
+        <span style="font-size:12px;color:var(--g4)" id="topbar-date"></span>
+      </div>
+    </div>
+    <div class="content" id="main-content"></div>
+  </div><!-- /.main -->
+</div><!-- /#app -->
+
+<!-- ══ MOBILE BOTTOM NAV ══ -->
+<div class="bottom-nav" id="bottom-nav" style="display:none">
+  <button class="bn-item" id="bn-dashboard" onclick="showSection('dashboard');closeMobileMore()">
+    <span class="bn-item-icon">🏠</span><span>總覽</span>
+  </button>
+  <button class="bn-item" id="bn-feedback" onclick="showSection('feedback');closeMobileMore()">
+    <span class="bn-item-icon">🍱</span><span>飲食</span>
+    <span class="bn-badge" id="bn-badge-feedback" style="display:none">0</span>
+  </button>
+  <button class="bn-item" id="bn-students" onclick="showSection('students');closeMobileMore()">
+    <span class="bn-item-icon">👥</span><span>學員</span>
+  </button>
+  <button class="bn-item" id="bn-weekplan" onclick="showSection('weekplan');closeMobileMore()">
+    <span class="bn-item-icon">📋</span><span>週計畫</span>
+  </button>
+  <button class="bn-item" id="bn-more" onclick="toggleMobileMore()">
+    <span class="bn-item-icon">☰</span><span>更多</span>
+  </button>
+</div>
+<!-- ══ MORE MENU ══ -->
+<div class="more-menu" id="more-menu">
+  <button class="mm-item" id="mm-bodytrack" onclick="showSection('bodytrack');closeMobileMore()" style="position:relative">
+    <span class="mm-item-icon">⚖️</span> 體態追蹤
+    <span id="bn-badge-bodytrack" style="display:none;background:#ef4444;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 6px;margin-left:6px">0</span>
+  </button>
+  <button class="mm-item" id="mm-menu" onclick="showSection('menu');closeMobileMore()">
+    <span class="mm-item-icon">🥗</span> 菜單管理
+  </button>
+  <button class="mm-item" id="mm-materials" onclick="showSection('materials');closeMobileMore()">
+    <span class="mm-item-icon">📚</span> 教材管理
+  </button>
+  <button class="mm-item" id="mm-accounts" onclick="showSection('accounts');closeMobileMore()" style="display:none" id="mm-accounts-wrap">
+    <span class="mm-item-icon">🔐</span> 帳號管理
+  </button>
+  <button class="mm-item" onclick="doRdLogout();closeMobileMore()" style="color:rgba(255,255,255,0.4)">
+    <span class="mm-item-icon">🚪</span> 登出
+  </button>
+</div>
+<div id="modal-container"></div>
+<!-- LIGHTBOX -->
+<div id="lightbox" class="lightbox hidden" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="">
+</div>
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════
+// DATA
+// ══════════════════════════════════════
+// ══ 動態新增的營養師帳號（從 Firebase cache 載入）
+const DYNAMIC_RD_USERS = {};
+
+// 四位超級管理員（有權限新增其他營養師）
+const RD_USERS_STATIC = {
+  tingxuan: { password: 'CoDare@ting', name: '亭瑄營養師', superAdmin: true, students: [] },
+  chengfang: { password: 'CoDare@fang', name: '承芳營養師', superAdmin: true, students: [] },
+  yutong:   { password: 'CoDare@tong', name: '禹彤營養師', superAdmin: true, students: [] },
+  shengwei:  { password: 'CoDare@wei',  name: '勝崴營養師', superAdmin: true, students: [] }
+};
+
+// On load: push static accounts to Firebase so any device can login
+(function syncStaticAccountsToFirebase() {
+  if (!_db) return;
+  Object.entries(RD_USERS_STATIC).forEach(([id, u]) => {
+    _db.ref('cd/rduser_' + id).once('value').then(snap => {
+      if (!snap.exists()) {
+        _db.ref('cd/rduser_' + id).set(u).catch(() => {});
+      }
+    }).catch(() => {});
+  });
+})();
+
+// Combined lookup: static + dynamic
+function getRdUser(id) {
+  return RD_USERS_STATIC[id] || DYNAMIC_RD_USERS[id] || gs('rduser_' + id) || null;
+}
+const RD_USERS = RD_USERS_STATIC;
+
+// Student DB — starts empty, populated from Firebase on login
+const STUDENTS_DB = {};
+
+// Course dates for current period — ALL days including weekends
+// Dynamic course dates — from start to end (inclusive), every day, no cap
+function buildStudentDates(startStr, endStr) {
+  const parseDate = str => {
+    if (!str) return null;
+    const p = str.replace(/-/g,'/').split('/');
+    if (p.length === 3) return new Date(+p[0], +p[1]-1, +p[2]);
+    if (p.length === 2) return new Date(2026, +p[0]-1, +p[1]);
+    return null;
+  };
+  const base = parseDate(startStr) || new Date(2026, 4, 25);
+  const end  = parseDate(endStr);
+  if (isNaN(base.getTime())) return [];
+  const dates = [];
+  for (let i = 0; i < 366; i++) {  // safety cap 366 days
+    const d = new Date(base); d.setDate(base.getDate() + i);
+    if (end && d > end) break;
+    if (!end && i >= 29) break;     // if no end given, default 29
+    dates.push(`${d.getMonth()+1}/${d.getDate()}`);
+  }
+  return dates;
+}
+
+// Build week groups from dates (7 days each, last week may be shorter)
+function buildWeekGroups(dates) {
+  const groups = [];
+  for (let w = 0; w * 7 < dates.length; w++) {
+    const chunk = dates.slice(w*7, (w+1)*7);
+    if (!chunk.length) break;
+    groups.push({ label: `W${w+1} ${chunk[0]}–${chunk[chunk.length-1]}`, dates: chunk });
+  }
+  return groups;
+}
+
+// Legacy COURSE_DATES for fallback
+const COURSE_DATES = buildStudentDates('2026/05/25', '2026/06/22');
+
+// ══ STATE ══
+let currentRD = null;
+let currentSection = 'dashboard';
+let selectedStudentId = null;
+let selectedFeedbackDay = null;
+let feedbackStudentId = null;
+let intakeStudentId = null;   // which student's intake card we're viewing
+let intakeTab = 'basic';      // 'basic' | 'goals' | 'diet' | 'lifestyle'
+
+// ══ STORAGE — delegated to Firebase (defined in <head>) ══
+
+// ══════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════
+function toggleLoginPw() {
+  const inp = document.getElementById('rd-pw');
+  const btn = inp.nextElementSibling;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.textContent = inp.type === 'password' ? '顯示' : '隱藏';
+}
+
+async function doRdLogin() {
+  const id = document.getElementById('rd-id').value.trim();
+  const pw = document.getElementById('rd-pw').value;
+  const keep = document.getElementById('rd-keep').checked;
+
+  let u = RD_USERS_STATIC[id] || null;
+
+  // Also check Firebase (dynamic accounts + cloud-synced static accounts)
+  if (_db) {
+    try {
+      const snap = await _db.ref('cd/rduser_' + id).once('value');
+      if (snap.exists()) u = snap.val();
+    } catch(e) {
+      // offline fallback
+      if (!u) u = gs('rduser_' + id);
+    }
+  } else {
+    if (!u) u = gs('rduser_' + id);
+  }
+
+  if (u && u.password === pw) {
+    currentRD = { ...u, id };
+    // Load dynamic RD users into memory
+    try {
+      const snap = await _db.ref('cd').orderByKey().startAt('rduser_').once('value');
+      if (snap.exists()) {
+        snap.forEach(child => {
+          if (child.key.startsWith('rduser_')) {
+            const rid = child.key.replace('rduser_', '');
+            DYNAMIC_RD_USERS[rid] = child.val();
+          }
+        });
+      }
+    } catch(e) {}
+
+    document.getElementById('rd-err').style.display = 'none';
+    if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
+    else localStorage.removeItem('cd_rd_autologin');
+    const btn = document.querySelector('.btn-login');
+    if (btn) { btn.textContent = '資料載入中...'; btn.disabled = true; }
+    await warmCache();
+    if (btn) { btn.textContent = '登入後台'; btn.disabled = false; }
+    launchRdApp();
+  } else {
+    document.getElementById('rd-err').style.display = 'block';
+  }
+}
+
+function launchRdApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  // Show mobile bottom nav only after login
+  document.getElementById('bottom-nav').style.display = '';
+  document.getElementById('sb-rdname').textContent = currentRD.name;
+  document.getElementById('topbar-date').textContent = formatDate(new Date());
+  const adminSection = document.getElementById('sb-admin-section');
+  if (adminSection) adminSection.style.display = currentRD.superAdmin ? '' : 'none';
+  const mmAccounts = document.getElementById('mm-accounts');
+  if (mmAccounts) mmAccounts.style.display = currentRD.superAdmin ? 'flex' : 'none';
+  showSection('dashboard');
+}
+
+function doRdLogout() {
+  localStorage.removeItem('cd_rd_autologin');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('bottom-nav').style.display = 'none';
+  document.getElementById('more-menu').classList.remove('open');
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('rd-pw').type = 'password';
+  document.querySelector('.pw-eye').textContent = '顯示';
+  currentRD = null;
+  document.getElementById('rd-id').value = '';
+  document.getElementById('rd-pw').value = '';
+  document.getElementById('rd-keep').checked = false;
+  // Clear cache on logout
+  Object.keys(_cache).forEach(k => delete _cache[k]);
+}
+
+// Auto-login on load
+(function() {
+  setTimeout(async () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('cd_rd_autologin'));
+      if (!saved) return;
+      let u = RD_USERS_STATIC[saved.id];
+      if (!u) {
+        try {
+          const snap = await _db.ref('cd/rduser_' + saved.id).once('value');
+          if (snap.exists()) u = snap.val();
+        } catch(e) { u = gs('rduser_' + saved.id); }
+      }
+      if (u && u.password === saved.pw) {
+        currentRD = { ...u, id: saved.id };
+        await warmCache();
+        launchRdApp();
+      }
+    } catch(e) {}
+  }, 500);
+})();
+
+document.getElementById('rd-pw').addEventListener('keydown', e => { if (e.key === 'Enter') doRdLogin(); });
+
+// ══════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════
+function formatDate(d) {
+  return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+}
+function todayStr() {
+  const d = new Date();
+  return `${d.getMonth()+1}/${d.getDate()}`;
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
+}
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.remove('hidden');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.add('hidden');
+}
+function getMyStudents() {
+  // Merge hardcoded students with dynamically created ones from Firebase cache / localStorage
+  const storedList = gs(`rd_students_${currentRD.id}`) || [];
+  const allIds = [...new Set([...currentRD.students, ...storedList])];
+  allIds.forEach(id => {
+    if (!STUDENTS_DB[id]) {
+      // Try Firebase cache first (warmed on login), then localStorage
+      const dyn = gs(`dynuser_${id}`);
+      if (dyn) STUDENTS_DB[id] = dyn;
+    }
+  });
+  return allIds.map(id => ({ id, ...STUDENTS_DB[id] })).filter(s => s.name);
+}
+function getActiveStudents() {
+  const savedStatus = gs(`rd_status_${currentRD.id}`) || {};
+  return getMyStudents().filter(s => {
+    const status = savedStatus[s.id] || s.status;
+    return status !== 'ended';
+  });
+}
+function countPendingFeedback() {
+  let count = 0;
+  getActiveStudents().forEach(s => {
+    buildStudentDates(s.start, s.end).forEach(d => {
+      const data = gs(`food_${s.id}_${d}`);
+      if (data && data.notified && !(Array.isArray(data.rdFeedbacks) ? data.rdFeedbacks.length : data.rdFeedback)) count++;
+    });
+  });
+  return count;
+}
+function countBodyNotifs() {
+  // Count students who have notified body update (not yet cleared by RD)
+  return getActiveStudents().filter(s => {
+    const n = gs(`body_notif_${s.id}`);
+    return n && n.notified && !n.rdSeen;
+  }).length;
+}
+
+function updateBadge() {
+  const n = countPendingFeedback();
+  const badge = document.getElementById('badge-feedback');
+  if (badge) { badge.textContent = n; badge.style.display = n > 0 ? '' : 'none'; }
+  // Mobile bottom nav feedback badge
+  const bnBadge = document.getElementById('bn-badge-feedback');
+  if (bnBadge) { bnBadge.textContent = n; bnBadge.style.display = n > 0 ? '' : 'none'; }
+
+  // Body notification badge
+  const nb = countBodyNotifs();
+  const bodyBadge = document.getElementById('badge-bodytrack');
+  if (bodyBadge) { bodyBadge.textContent = nb; bodyBadge.style.display = nb > 0 ? '' : 'none'; }
+  const bnBodyBadge = document.getElementById('bn-badge-bodytrack');
+  if (bnBodyBadge) { bnBodyBadge.textContent = nb; bnBodyBadge.style.display = nb > 0 ? '' : 'none'; }
+}
+
+function toggleMobileMore() {
+  const m = document.getElementById('more-menu');
+  if (m) m.classList.toggle('open');
+  document.getElementById('bn-more')?.classList.toggle('active', m?.classList.contains('open'));
+}
+function closeMobileMore() {
+  document.getElementById('more-menu')?.classList.remove('open');
+  document.getElementById('bn-more')?.classList.remove('active');
+}
+
+// ══════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════
+const SECTION_TITLES = {
+  dashboard: '總覽', feedback: '飲食回覆', students: '學員管理',
+  weekplan: '週計畫設定', bodytrack: '體態追蹤', menu: '菜單管理',
+  materials: '教材管理', accounts: '帳號管理'
+};
+function showSection(sec) {
+  currentSection = sec;
+  if (sec !== 'students') intakeStudentId = null;
+  Object.keys(SECTION_TITLES).forEach(k => {
+    document.getElementById('nav-' + k)?.classList.toggle('active', k === sec);
+  });
+  // Mobile bottom nav highlight
+  ['dashboard','feedback','students','weekplan'].forEach(k => {
+    document.getElementById('bn-' + k)?.classList.toggle('active', k === sec);
+  });
+  // More menu items
+  ['bodytrack','menu','materials','accounts'].forEach(k => {
+    document.getElementById('mm-' + k)?.classList.toggle('active', k === sec);
+  });
+  document.getElementById('topbar-title').textContent = SECTION_TITLES[sec] || sec;
+  const renders = {
+    dashboard: renderDashboard, feedback: renderFeedback,
+    students: renderStudentsPage, weekplan: renderWeekplan,
+    bodytrack: renderBodyTrack, menu: renderMenuMgr,
+    materials: renderMaterials, accounts: renderAccounts
+  };
+  document.getElementById('main-content').innerHTML = (renders[sec] || renderDashboard)();
+  updateBadge();
+  window.scrollTo(0, 0);
+}
+
+function renderStudentsPage() {
+  if (intakeStudentId) return renderIntakeCard(intakeStudentId);
+  return renderStudents();
+}
+
+function openIntakeCard(id) {
+  intakeStudentId = id;
+  intakeTab = 'basic';
+  document.getElementById('main-content').innerHTML = renderIntakeCard(id);
+  window.scrollTo(0, 0);
+}
+
+// ══════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════
+function renderDashboard() {
+  const students = getActiveStudents();
+  const pending = countPendingFeedback();
+  const today = todayStr();
+  const notifiedToday = students.filter(s => {
+    const d = gs(`food_${s.id}_${today}`);
+    return d && d.notified;
+  }).length;
+
+  const recentList = students.map(s => {
+    const d = gs(`food_${s.id}_${today}`);
+    const hasFb = d && (Array.isArray(d.rdFeedbacks) ? d.rdFeedbacks.length : d.rdFeedback);
+    const notified = d && d.notified;
+    return `<div class="student-row" onclick="openFeedbackForStudent('${s.id}','${today}')">
+      <div class="student-avatar">${s.name.charAt(0)}</div>
+      <div class="student-info">
+        <div class="student-name">${s.name}</div>
+        <div class="student-meta">${s.goal}</div>
+      </div>
+      <div>${notified && !hasFb ? '<span class="pill urgent">待回覆</span>' : hasFb ? '<span class="pill active">已回覆</span>' : '<span class="pill ended">未上傳</span>'}</div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="page-header">
+    <h1>今日概覽</h1>
+    <p>${formatDate(new Date())}｜你好，${currentRD.name}</p>
+  </div>
+
+  <div class="grid3" style="margin-bottom:20px">
+    <div class="stat-box">
+      <div class="stat-val">${students.length}</div>
+      <div class="stat-label">本期學員</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val">${notifiedToday}</div>
+      <div class="stat-label">今日上傳</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" style="color:var(--red)">${pending}</div>
+      <div class="stat-label">待回覆筆數</div>
+      ${pending > 0 ? '<div class="stat-badge urgent">需處理</div>' : '<div class="stat-badge ok">全部完成</div>'}
+    </div>
+  </div>
+
+  ${pending > 0 ? `<div class="notice amber">⚠️ 有 <strong>${pending}</strong> 筆學員飲食紀錄待回覆，請盡快處理！</div>` : `<div class="notice teal">✅ 所有學員回覆都已完成，辛苦了！</div>`}
+
+  <div class="card">
+    <div class="card-title">👥 學員今日狀況</div>
+    ${recentList || '<div class="empty-placeholder"><p>尚無學員</p></div>'}
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">🗓️ 課程進度</div>
+      ${students.map(s => {
+        const done = buildStudentDates(s.start, s.end).filter(d => { const f = gs(`food_${s.id}_${d}`); return f && f.notified; }).length;
+        const total = buildStudentDates(s.start, s.end).length;
+        const pct = total ? Math.round(done/total*100) : 0;
+        return `<div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+            <span class="fw7">${s.name}</span><span style="color:var(--teal)">${done}/${total} 天（${pct}%）</span>
+          </div>
+          <div style="height:6px;background:var(--g2);border-radius:3px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:var(--teal);border-radius:3px"></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="card">
+      <div class="card-title">⚖️ 最新體重</div>
+      ${students.map(s => {
+        const prog = gs(`progress_${s.id}`) || [];
+        const latest = [...prog].reverse().find(p => p && p.weight);
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--g1)">
+          <div>
+            <div class="fw7" style="font-size:13px">${s.name}</div>
+            <div class="text-muted">${s.goal}</div>
+          </div>
+          <div style="font-size:18px;font-weight:900;color:var(--teal)">${latest ? latest.weight + 'kg' : '--'}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <!-- LINE Official Account -->
+  <div class="card" style="border:1.5px solid #06C755;background:linear-gradient(135deg,#f0fff4 0%,#fff 100%)">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div style="width:48px;height:48px;background:#06C755;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08l-.164 1.02c-.045.301-.24 1.186 1.049.645 1.291-.539 6.916-4.078 9.436-6.975C23.176 14.393 24 12.458 24 10.314"/></svg>
+      </div>
+      <div style="flex:1">
+        <div style="font-size:15px;font-weight:700;color:#06C755;margin-bottom:3px">📱 LINE 官方帳號</div>
+        <div style="font-size:13px;color:var(--g5);line-height:1.5">點擊前往 LINE Official Account Manager，查看並回覆客戶訊息</div>
+      </div>
+      <a href="https://chat.line.biz/U6f06032d6e8150c30671bf8b0d0b7365" target="_blank" rel="noopener" style="text-decoration:none">
+        <button class="btn" style="background:#06C755;color:#fff;font-size:14px;padding:10px 20px">
+          前往 LINE 後台 →
+        </button>
+      </a>
+    </div>
+    <div style="margin-top:12px;font-size:12px;color:var(--g4);line-height:1.6">
+      ⚠️ LINE 官方帳號的訊息需在 LINE 平台上回覆，點上方按鈕開啟 LINE Official Account Manager 進行管理。
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════
+// FEEDBACK
+// ══════════════════════════════════════
+function renderFeedback() {
+  const students = getActiveStudents();
+  const today = todayStr();
+
+  // Always validate feedbackStudentId — reset if null, not in active list, or student not found
+  if (!feedbackStudentId || !students.find(x => x.id === feedbackStudentId)) {
+    feedbackStudentId = students[0]?.id || null;
+  }
+  if (!selectedFeedbackDay) selectedFeedbackDay = today;
+
+  const studentTabs = students.map(s => {
+    const hasPending = buildStudentDates(s.start, s.end).some(d => { const f = gs(`food_${s.id}_${d}`); return f && f.notified && !(Array.isArray(f.rdFeedbacks) ? f.rdFeedbacks.length : f.rdFeedback); });
+    return `<button class="btn ${feedbackStudentId === s.id ? 'btn-teal' : 'btn-outline'}" style="font-size:13px;padding:7px 14px;position:relative" onclick="switchFeedbackStudent('${s.id}')">
+      ${s.name}${hasPending ? '<span style="position:absolute;top:4px;right:4px;width:7px;height:7px;background:var(--red);border-radius:50%"></span>' : ''}
+    </button>`;
+  }).join('');
+
+  const s = students.find(x => x.id === feedbackStudentId);
+  if (!s) return `<div class="page-header"><h1>飲食回覆</h1></div><div class="empty-placeholder"><div class="ei">🍱</div><p>尚無學員</p></div>`;
+
+  // Build week groups from the selected student's actual course dates
+  const sDates = buildStudentDates(s.start, s.end);
+  const weekGroups = buildWeekGroups(sDates);
+
+  const weekNavHTML = weekGroups.map(wg => {
+    const chips = wg.dates.map(d => {
+      const food = gs(`food_${s.id}_${d}`);
+      const notified = food && food.notified;
+      const hasFb = food && (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks.length : food.rdFeedback);
+      const isToday = d === today;
+      let cls = 'day-chip';
+      if (d === selectedFeedbackDay) cls += ' active';
+      else if (notified && !hasFb) cls += ' notified';
+      else if (notified) cls += ' has-data';
+      return `<button class="${cls}" onclick="selectFeedbackDay('${d}')">${d}${isToday ? '▸' : ''}</button>`;
+    }).join('');
+    return `<div style="margin-bottom:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--g4);margin-bottom:5px;letter-spacing:0.5px">${wg.label}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
+    </div>`;
+  }).join('');
+
+  const food = gs(`food_${s.id}_${selectedFeedbackDay}`) || null;
+
+  let contentHTML = '';
+  if (!food || (!food.breakfast && !food.lunch && !food.dinner && !food.notified)) {
+    contentHTML = `<div class="empty-placeholder"><div class="ei">🍽️</div><p>學員尚未上傳 ${selectedFeedbackDay} 的飲食紀錄</p></div>`;
+  } else {
+    const meals = [
+      { label: '早餐', key: 'breakfast' }, { label: '點心（上午）', key: 'snack1' },
+      { label: '午餐', key: 'lunch' }, { label: '點心（下午）', key: 'snack2' },
+      { label: '晚餐', key: 'dinner' }, { label: '宵夜', key: 'latenight' }
+    ];
+    const mealBlocks = meals.map(m => {
+      const text = food[m.key] || '';
+      const imgs = food[m.key + '_imgs'] || [];
+      if (!text && !imgs.length) return '';
+      // Support array of feedback messages
+      const mealFbArr = Array.isArray(food[m.key + '_rdFeedbacks'])
+        ? food[m.key + '_rdFeedbacks']
+        : (food[m.key + '_rdFeedback'] ? [{ text: food[m.key + '_rdFeedback'], at: food[m.key + '_rdFeedbackAt'], id: 0 }] : []);
+
+      const fbBubbles = mealFbArr.map((fb, fi) => `
+        <div style="background:var(--teal-light);border-left:3px solid var(--teal);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--teal-dark);margin-bottom:6px">
+          <div style="white-space:pre-wrap">${fb.text}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+            <span style="font-size:10px;color:var(--g4)">${fb.at ? new Date(fb.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-sm" style="font-size:10px;padding:2px 7px;background:#fff;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer"
+                onclick="startEditMealFb('${m.key}',${fi},\`${fb.text.replace(/`/g,'&#96;')}\`)">✏️</button>
+              <button class="btn btn-sm" style="font-size:10px;padding:2px 7px;background:#fff;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer"
+                onclick="deleteMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}',${fi})">🗑️</button>
+            </div>
+          </div>
+        </div>`).join('');
+
+      return `<div class="meal-block" style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--g1)">
+        <div class="meal-block-title">${m.label}</div>
+        ${imgs.length ? `<div class="photo-grid">${imgs.map(src => `<img class="photo-thumb" src="${src}" onclick="openLightbox('${src}')" alt="">`).join('')}</div>` : ''}
+        <div class="meal-text ${!text ? 'empty' : ''}">${text || '（無文字描述）'}</div>
+        <div style="margin-top:10px">
+          ${fbBubbles}
+          <div id="meal-edit-wrap-${m.key}" style="display:none;margin-bottom:6px">
+            <textarea id="meal-edit-ta-${m.key}" rows="2" style="width:100%;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;resize:none;outline:none"></textarea>
+            <div style="display:flex;gap:6px;margin-top:4px;justify-content:flex-end">
+              <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('meal-edit-wrap-${m.key}').style.display='none'">取消</button>
+              <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditMealFb('${s.id}','${selectedFeedbackDay}','${m.key}')">更新</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <textarea id="meal-fb-${m.key}" rows="2" placeholder="針對${m.label}回饋…新增一則" style="flex:1;border:1.5px solid var(--g2);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;resize:none;outline:none;line-height:1.5" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"></textarea>
+            <button class="btn btn-teal btn-sm" style="margin-top:2px;flex-shrink:0" onclick="saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')">送出</button>
+          </div>
+        </div>
+      </div>`;
+    }).filter(Boolean).join('');
+
+    const lifeItems = [
+      { icon: '🏃', label: '運動', val: food.exType ? `${food.exType}${food.exMin ? ' ' + food.exMin + '分鐘' : ''}` : null },
+      { icon: '💧', label: '飲水', val: food.water ? food.water + 'ml' : null },
+      { icon: '😴', label: '睡眠', val: food.sleep ? food.sleep + '小時' : null },
+      { icon: '🚽', label: '排便', val: food.poop ? food.poop + '次' : null }
+    ].filter(x => x.val);
+
+    // Overall feedback: array
+    const overallArr = Array.isArray(food.rdFeedbacks)
+      ? food.rdFeedbacks
+      : (food.rdFeedback ? [{ text: food.rdFeedback, at: food.rdFeedbackAt, id: 0 }] : []);
+
+    const overallBubbles = overallArr.map((fb, fi) => `
+      <div class="feedback-box" style="margin-bottom:10px">
+        <div style="white-space:pre-wrap;font-size:13px">${fb.text}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+          <span style="font-size:10px;color:var(--g4)">${fb.at ? new Date(fb.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#fff;border:1px solid var(--teal);color:var(--teal);border-radius:5px;cursor:pointer"
+              onclick="startEditOverallFb(${fi},\`${fb.text.replace(/`/g,'&#96;')}\`)">✏️ 編輯</button>
+            <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#fff;border:1px solid var(--red);color:var(--red);border-radius:5px;cursor:pointer"
+              onclick="deleteOverallFeedback('${s.id}','${selectedFeedbackDay}',${fi})">🗑️ 刪除</button>
+          </div>
+        </div>
+      </div>`).join('');
+
+    contentHTML = `
+      ${mealBlocks || '<div class="text-muted" style="padding:12px 0">飲食內容為空</div>'}
+      ${lifeItems.length ? `<div class="life-chips">${lifeItems.map(x => `<span class="life-chip">${x.icon} ${x.label}：${x.val}</span>`).join('')}</div>` : ''}
+      ${food.lifeNote ? `<div style="margin-top:12px;padding:12px;background:var(--amber-light);border-radius:8px;font-size:13px;line-height:1.7">📝 <strong>飲食札記：</strong>${food.lifeNote}</div>` : ''}
+
+      <div class="divider"></div>
+      <div style="font-size:14px;font-weight:700;color:var(--g7);margin-bottom:4px">📝 整日總結回饋</div>
+      <div style="font-size:12px;color:var(--g4);margin-bottom:10px">可送出多則，每則可獨立編輯或刪除</div>
+      ${overallBubbles}
+      <div id="overall-edit-wrap" style="display:none;margin-bottom:10px">
+        <textarea id="overall-edit-ta" rows="3" style="width:100%;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;outline:none"></textarea>
+        <div style="display:flex;gap:8px;margin-top:6px;justify-content:flex-end">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('overall-edit-wrap').style.display='none'">取消</button>
+          <button class="btn btn-teal btn-sm" onclick="saveEditOverallFb('${s.id}','${selectedFeedbackDay}')">更新</button>
+        </div>
+      </div>
+      <textarea class="feedback-input" id="fb-input" placeholder="新增一則整日總結…"></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" onclick="insertTemplate()">插入常用語句</button>
+        <button class="btn btn-teal" onclick="saveFeedback('${s.id}','${selectedFeedbackDay}')">✅ 新增總結回覆</button>
+      </div>
+
+      <div class="divider" style="margin-top:16px"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:13px;color:var(--g5)">
+          ${food.rdFeedbackDone ? `<span style="color:var(--teal);font-weight:700">✅ 已通知學員回饋完成</span>` : '完成回饋後，點右側按鈕通知學員'}
+        </div>
+        <button class="btn btn-teal" onclick="notifyFeedbackDone('${s.id}','${selectedFeedbackDay}')">
+          📣 通知學員：回饋完成
+        </button>
+      </div>`;
+  }
+
+  return `
+  <div class="page-header">
+    <h1>飲食回覆</h1>
+    <p>查看學員每日飲食並給予專業回饋</p>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">${studentTabs}</div>
+
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div class="student-avatar">${s.name.charAt(0)}</div>
+      <div>
+        <div class="fw7">${s.name}｜${s.phone}</div>
+        <div class="text-muted">目標：${s.goal}｜第 ${s.period} 期 W${s.week}</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="overflow-x:auto;margin-bottom:12px">
+    <div class="card" style="padding:14px 16px">
+      ${weekNavHTML}
+      <div style="font-size:11px;color:var(--g4);margin-top:6px;display:flex;gap:12px">
+        <span>🔴 待回覆</span><span style="color:var(--teal)">🟢 已回覆</span><span>— 未上傳</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">${contentHTML}</div>`;
+}
+
+function switchFeedbackStudent(id) {
+  feedbackStudentId = id;
+  selectedFeedbackDay = todayStr();
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function selectFeedbackDay(d) {
+  selectedFeedbackDay = d;
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function openFeedbackForStudent(id, day) {
+  feedbackStudentId = id;
+  selectedFeedbackDay = day;
+  showSection('feedback');
+}
+
+// ── 送入收件夾 helper ──
+function pushInbox(studentId, msg) {
+  const key = `inbox_${studentId}`;
+  const arr = gs(key) || [];
+  arr.push({ ...msg, at: new Date().toISOString(), read: false });
+  // keep last 50
+  if (arr.length > 50) arr.splice(0, arr.length - 50);
+  ss(key, arr);
+}
+
+function saveFeedback(studentId, day) {
+  const text = document.getElementById('fb-input')?.value?.trim();
+  if (!text) { showToast('請先輸入回覆內容'); return; }
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks
+    : (existing.rdFeedback ? [{ text: existing.rdFeedback, at: existing.rdFeedbackAt }] : []);
+  arr.push({ text, at: new Date().toISOString() });
+  existing.rdFeedbacks = arr;
+  existing.rdFeedback = text; // backward compat
+  existing.rdFeedbackAt = new Date().toISOString();
+  ss(`food_${studentId}_${day}`, existing);
+  showToast('✅ 總結回覆已送出！');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+  updateBadge();
+}
+
+function startEditOverallFb(idx, text) {
+  const wrap = document.getElementById('overall-edit-wrap');
+  const ta = document.getElementById('overall-edit-ta');
+  if (!wrap || !ta) return;
+  ta.value = text;
+  ta.dataset.idx = idx;
+  wrap.style.display = 'block';
+}
+
+function saveEditOverallFb(studentId, day) {
+  const ta = document.getElementById('overall-edit-ta');
+  if (!ta) return;
+  const text = ta.value.trim();
+  const idx = parseInt(ta.dataset.idx);
+  if (!text) { showToast('內容不能為空'); return; }
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks : [];
+  if (arr[idx]) { arr[idx].text = text; arr[idx].editedAt = new Date().toISOString(); }
+  existing.rdFeedbacks = arr;
+  existing.rdFeedback = arr[arr.length - 1]?.text || '';
+  ss(`food_${studentId}_${day}`, existing);
+  showToast('✅ 已更新！');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function saveMealFeedback(studentId, day, mealKey) {
+  const input = document.getElementById(`meal-fb-${mealKey}`);
+  const text = input?.value?.trim();
+  if (!text) { showToast('請先輸入回饋內容'); return; }
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks']
+    : (existing[mealKey + '_rdFeedback'] ? [{ text: existing[mealKey + '_rdFeedback'], at: existing[mealKey + '_rdFeedbackAt'] }] : []);
+  arr.push({ text, at: new Date().toISOString() });
+  existing[mealKey + '_rdFeedbacks'] = arr;
+  existing[mealKey + '_rdFeedback'] = text;
+  existing[mealKey + '_rdFeedbackAt'] = new Date().toISOString();
+  ss(`food_${studentId}_${day}`, existing);
+  showToast('✅ 餐別回饋已送出！');
+  if (input) input.value = '';
+  document.getElementById('main-content').innerHTML = renderFeedback();
+  updateBadge();
+}
+
+function startEditMealFb(mealKey, idx, text) {
+  const wrap = document.getElementById(`meal-edit-wrap-${mealKey}`);
+  const ta = document.getElementById(`meal-edit-ta-${mealKey}`);
+  if (!wrap || !ta) return;
+  ta.value = text;
+  ta.dataset.idx = idx;
+  wrap.style.display = 'block';
+}
+
+function saveEditMealFb(studentId, day, mealKey) {
+  const ta = document.getElementById(`meal-edit-ta-${mealKey}`);
+  if (!ta) return;
+  const text = ta.value.trim();
+  const idx = parseInt(ta.dataset.idx);
+  if (!text) { showToast('內容不能為空'); return; }
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks'] : [];
+  if (arr[idx]) { arr[idx].text = text; arr[idx].editedAt = new Date().toISOString(); }
+  existing[mealKey + '_rdFeedbacks'] = arr;
+  existing[mealKey + '_rdFeedback'] = arr[arr.length - 1]?.text || '';
+  ss(`food_${studentId}_${day}`, existing);
+  showToast('✅ 已更新！');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function deleteMealFeedback(studentId, day, mealKey, idx) {
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks'] : [];
+  arr.splice(idx, 1);
+  existing[mealKey + '_rdFeedbacks'] = arr;
+  existing[mealKey + '_rdFeedback'] = arr[arr.length - 1]?.text || '';
+  ss(`food_${studentId}_${day}`, existing);
+  showToast('🗑️ 已刪除');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+  updateBadge();
+}
+
+function deleteOverallFeedback(studentId, day, idx) {
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks : [];
+  if (idx !== undefined) arr.splice(idx, 1);
+  else arr.length = 0;
+  existing.rdFeedbacks = arr;
+  existing.rdFeedback = arr[arr.length - 1]?.text || '';
+  if (!arr.length) { delete existing.rdFeedbackDone; }
+  ss(`food_${studentId}_${day}`, existing);
+  showToast('🗑️ 已刪除');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+  updateBadge();
+}
+
+function notifyFeedbackDone(studentId, day) {
+  const existing = gs(`food_${studentId}_${day}`) || {};
+  existing.rdFeedbackDone = true;
+  existing.rdFeedbackDoneAt = new Date().toISOString();
+  ss(`food_${studentId}_${day}`, existing);
+  // Push to student inbox
+  pushInbox(studentId, {
+    type: 'feedback',
+    title: '🥦 營養師已完成飲食回饋！',
+    body: `${day} 的飲食回饋已完成，點此查看`,
+    day
+  });
+  showToast('📣 已通知學員回饋完成！');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function insertTemplate() {
+  const templates = [
+    '今天的飲食整體均衡，繼續保持！',
+    '蔬菜攝取量不足，下餐可以多補充一份深色蔬菜。',
+    '蛋白質攝取良好，有助於肌肉維持與飽足感。',
+    '碳水化合物稍多，建議下一餐以蔬菜為主、減少澱粉。',
+    '飲水量不足，記得多補充水分，目標每天 1500ml 以上！',
+    '今天很棒！三餐均衡、運動也有完成，繼續加油💪',
+  ];
+  const pick = templates[Math.floor(Math.random() * templates.length)];
+  const ta = document.getElementById('fb-input');
+  if (ta) { ta.value = (ta.value ? ta.value + '\n' : '') + pick; ta.focus(); }
+}
+
+// ── 通知學員：週計畫 / 體態 / 教材 / 菜單 已更新 ──
+function notifyStudentUpdate(studentId, type, title, body) {
+  pushInbox(studentId, { type, title, body });
+  showToast('📣 已通知學員！');
+}
+
+// ══════════════════════════════════════
+// STUDENTS
+// ══════════════════════════════════════
+function renderStudents() {
+  const allStudents = getMyStudents();
+  const savedOrder  = gs(`rd_order_${currentRD.id}`)  || [];
+  const savedStatus = gs(`rd_status_${currentRD.id}`) || {};
+
+  // Apply saved statuses
+  allStudents.forEach(s => {
+    if (savedStatus[s.id] !== undefined) s.status = savedStatus[s.id];
+  });
+
+  // Sort by saved order, new students go to end
+  const orderedIds = [...savedOrder, ...allStudents.map(s => s.id).filter(id => !savedOrder.includes(id))];
+  const ordered = orderedIds.map(id => allStudents.find(s => s.id === id)).filter(Boolean);
+
+  const active = ordered.filter(s => s.status !== 'ended');
+  const ended  = ordered.filter(s => s.status === 'ended');
+
+  const renderRow = (s, draggable) => {
+    const pw = s.password || gs(`dynuser_${s.id}`)?.password || '——';
+    const isEnded = s.status === 'ended';
+    return `<tr class="student-row" draggable="${draggable}" data-id="${s.id}"
+        ondragstart="onDragStart(event,'${s.id}')" ondragover="onDragOver(event)"
+        ondrop="onDrop(event,'${s.id}')" ondragend="onDragEnd()"
+        style="${isEnded ? 'opacity:0.55' : ''}">
+      <td style="width:24px;cursor:${draggable ? 'grab' : 'default'};color:var(--g3);font-size:18px;user-select:none">${draggable ? '⠿' : ''}</td>
+      <td onclick="openIntakeCard('${s.id}')" style="cursor:pointer">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="student-avatar" style="width:34px;height:34px;font-size:13px">${s.name.charAt(0)}</div>
+          <div><div class="fw7">${s.name}</div><div class="text-muted">${s.phone}</div></div>
+        </div>
+      </td>
+      <td>
+        <div style="font-size:12px;color:var(--g5)">帳號：<code style="background:var(--g1);padding:1px 5px;border-radius:3px">${s.phone}</code></div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:3px">
+          <span style="font-size:12px;color:var(--g5)">密碼：</span>
+          <span id="pw-${s.id}" style="font-family:monospace;font-size:12px;background:var(--g1);padding:1px 7px;border-radius:4px">••••••</span>
+          <button onclick="togglePwDisplay('${s.id}','${pw}')" style="font-size:11px;color:var(--teal);background:none;border:none;cursor:pointer;padding:0;flex-shrink:0">顯示</button>
+        </div>
+      </td>
+      <td style="font-size:13px">${s.start || '——'} – ${s.end || '——'}</td>
+      <td>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:nowrap">
+          <button class="btn btn-teal btn-sm" onclick="openIntakeCard('${s.id}')" title="查看建檔">📋 建檔</button>
+          <button class="btn btn-outline btn-sm" onclick="openChangePwModal('${s.id}')" title="修改密碼">🔑 改密碼</button>
+          <button class="btn btn-sm" style="background:${isEnded ? 'var(--teal-light)' : 'var(--red-light)'};color:${isEnded ? 'var(--teal-dark)' : 'var(--red)'};border:1.5px solid ${isEnded ? 'var(--teal)' : 'var(--red)'};border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700;white-space:nowrap"
+            onclick="toggleStudentStatus('${s.id}','${s.status}')">${isEnded ? '↩ 復課' : '✓ 結案'}</button>
+          <button class="btn btn-sm" style="background:#fff;color:var(--g4);border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;cursor:pointer;font-size:12px;font-family:inherit;white-space:nowrap"
+            onclick="confirmDeleteStudent('${s.id}','${s.name}')" title="刪除學員">🗑️</button>
+        </div>
+      </td>
+    </tr>`;
+  };
+
+  const thead = `<thead><tr><th style="width:24px"></th><th>學員</th><th>帳號密碼</th><th>課程期間</th><th>操作</th></tr></thead>`;
+
+  const endedSection = ended.length > 0 ? `<div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:10px 16px;background:var(--g1);font-weight:700;font-size:13px;color:var(--g5)">⬜ 已結案（${ended.length} 位）</div>
+    <table class="tbl">${thead}<tbody>${ended.map(s => renderRow(s, false)).join('')}</tbody></table>
+  </div>` : '';
+
+  return `
+  <div class="page-header"><h1>學員管理</h1>
+    <p>⠿ 拖曳排序　📋 建檔　🔑 改密碼　✓ 結案 / ↩ 復課</p>
+  </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div style="font-size:13px;color:var(--g4)">進行中 <strong>${active.length}</strong> 位　已結案 <strong>${ended.length}</strong> 位</div>
+    <button class="btn btn-teal" onclick="openAddStudentModal()">＋ 新增學員</button>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;margin-bottom:14px">
+    <div style="padding:10px 16px;background:var(--teal-light);font-weight:700;font-size:13px;color:var(--teal-dark)">🟢 進行中（${active.length} 位）</div>
+    <table class="tbl">${thead}<tbody id="active-tbody">
+      ${active.length ? active.map(s => renderRow(s, true)).join('') : '<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--g3)">尚無進行中學員，點右上角「＋ 新增學員」新增</td></tr>'}
+    </tbody></table>
+  </div>
+
+  ${endedSection}`;
+}
+
+// ── 拖曳排序 ──
+let _dragId = null;
+function onDragStart(e, id) { _dragId = id; e.currentTarget.style.opacity = '0.4'; }
+function onDragOver(e) { e.preventDefault(); e.currentTarget.style.background = 'var(--teal-light)'; }
+function onDragEnd() {
+  document.querySelectorAll('.student-row').forEach(r => { r.style.opacity = ''; r.style.background = ''; });
+  _dragId = null;
+}
+function onDrop(e, targetId) {
+  e.preventDefault(); e.currentTarget.style.background = '';
+  if (!_dragId || _dragId === targetId) return;
+  const all = getMyStudents();
+  const savedOrder = gs(`rd_order_${currentRD.id}`) || all.map(s => s.id);
+  const savedStatus = gs(`rd_status_${currentRD.id}`) || {};
+  all.forEach(s => { if (savedStatus[s.id]) s.status = savedStatus[s.id]; });
+  const allIds = [...new Set([...savedOrder, ...all.map(s => s.id)])];
+  const activeIds = allIds.filter(id => { const s = all.find(x => x.id === id); return s && s.status !== 'ended'; });
+  const fi = activeIds.indexOf(_dragId), ti = activeIds.indexOf(targetId);
+  if (fi === -1 || ti === -1) return;
+  activeIds.splice(fi, 1); activeIds.splice(ti, 0, _dragId);
+  const endedIds = allIds.filter(id => !activeIds.includes(id));
+  ss(`rd_order_${currentRD.id}`, [...activeIds, ...endedIds]);
+  document.getElementById('main-content').innerHTML = renderStudents();
+}
+
+function toggleStudentStatus(studentId, currentStatus) {
+  const newStatus = currentStatus === 'ended' ? 'active' : 'ended';
+  const savedStatus = gs(`rd_status_${currentRD.id}`) || {};
+  savedStatus[studentId] = newStatus;
+  ss(`rd_status_${currentRD.id}`, savedStatus);
+  if (STUDENTS_DB[studentId]) STUDENTS_DB[studentId].status = newStatus;
+  showToast(newStatus === 'ended' ? '✅ 已結案' : '✅ 已復課');
+  document.getElementById('main-content').innerHTML = renderStudents();
+}
+
+function confirmDeleteStudent(studentId, name) {
+  showModal('🗑️ 刪除學員', `
+    <div class="notice amber">⚠️ 此操作<strong>無法復原</strong>，學員所有資料（飲食紀錄、體態、目標）將一併刪除。</div>
+    <div style="font-size:15px;font-weight:700;margin:16px 0 8px">確定要刪除「${name}」嗎？</div>
+    <div style="font-size:13px;color:var(--g5)">帳號：${studentId}</div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '確定刪除', action: `deleteStudent('${studentId}')`, style: 'btn-teal' }
+  ]);
+}
+
+async function deleteStudent(studentId) {
+  // Remove from STUDENTS_DB memory
+  delete STUDENTS_DB[studentId];
+
+  // Remove from currentRD.students
+  currentRD.students = currentRD.students.filter(id => id !== studentId);
+
+  // Remove from rd_students list in cache + Firebase
+  const rdList = gs(`rd_students_${currentRD.id}`) || [];
+  const newList = rdList.filter(id => id !== studentId);
+  if (window._cache) _cache[`rd_students_${currentRD.id}`] = newList;
+  ss(`rd_students_${currentRD.id}`, newList);
+
+  // Remove from saved order and status
+  const savedOrder = gs(`rd_order_${currentRD.id}`) || [];
+  ss(`rd_order_${currentRD.id}`, savedOrder.filter(id => id !== studentId));
+  const savedStatus = gs(`rd_status_${currentRD.id}`) || {};
+  delete savedStatus[studentId];
+  ss(`rd_status_${currentRD.id}`, savedStatus);
+
+  // Remove dynuser from Firebase (set to null removes it)
+  if (window._cache) delete _cache[`dynuser_${studentId}`];
+  ss(`dynuser_${studentId}`, null);
+  if (_db) {
+    try { await _db.ref('cd/dynuser_' + studentId).remove(); } catch(e) {}
+  }
+
+  closeModal();
+  showToast('🗑️ 學員已刪除');
+  document.getElementById('main-content').innerHTML = renderStudents();
+}
+
+function togglePwDisplay(studentId, pw) {
+  const el = document.getElementById('pw-' + studentId);
+  const btn = el?.nextElementSibling;
+  if (!el) return;
+  if (el.textContent === '••••••') { el.textContent = pw; if (btn) btn.textContent = '隱藏'; }
+  else { el.textContent = '••••••'; if (btn) btn.textContent = '顯示'; }
+}
+
+function v(val, fallback='——') {
+  return (val && String(val).trim()) ? String(val).trim() : `<span class="empty">${fallback}</span>`;
+}
+
+function renderIntakeCard(id) {
+  const s = STUDENTS_DB[id] || gs(`dynuser_${id}`) || {};
+  const intake = gs(`intake_${id}`) || {};
+  const prog = gs(`progress_${id}`) || [];
+  const latestW = [...prog].reverse().find(p => p && p.weight);
+
+  const tabs = [
+    { key:'basic',     label:'👤 基本資料' },
+    { key:'goals',     label:'🎯 課程目標' },
+    { key:'diet',      label:'🍱 飲食習慣' },
+    { key:'lifestyle', label:'🏃 生活習慣' }
+  ];
+
+  const tabHTML = tabs.map(t =>
+    `<button class="intake-tab ${intakeTab===t.key?'active':''}" onclick="switchIntakeTab('${id}','${t.key}')">${t.label}</button>`
+  ).join('');
+
+  let bodyHTML = '';
+
+  if (intakeTab === 'basic') {
+    bodyHTML = `
+    <div class="intake-section-title">基本資料</div>
+    <div class="intake-row"><span class="intake-label">姓名</span><span class="intake-val">${v(intake.name || s.name)}</span></div>
+    <div class="intake-row"><span class="intake-label">Email（Notion 帳號）</span><span class="intake-val">${v(intake.email)}</span></div>
+    <div class="intake-row"><span class="intake-label">性別</span><span class="intake-val">${v(intake.gender)}</span></div>
+    <div class="intake-row"><span class="intake-label">年紀</span><span class="intake-val">${intake.age ? intake.age + ' 歲' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">身高</span><span class="intake-val">${intake.height ? intake.height + ' cm' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">體重</span><span class="intake-val">${intake.weight ? intake.weight + ' kg' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">體脂率</span><span class="intake-val">${intake.bodyFat ? intake.bodyFat + ' %' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">日常工作活動量</span><span class="intake-val">${v(intake.activityLevel)}</span></div>
+    <div class="intake-section-title">健康狀況</div>
+    <div class="intake-row"><span class="intake-label">慢性疾病及既往病史</span><span class="intake-val">${intake.disease ? `<span class="intake-tag warn">${intake.disease}</span>` : v(null)}</span></div>
+    <div class="intake-row"><span class="intake-label">服用藥物或保健品</span><span class="intake-val">${v(intake.medication)}</span></div>
+    <div class="intake-section-title">課程帳號</div>
+    <div class="intake-row"><span class="intake-label">App 帳號（手機）</span><span class="intake-val">${v(s.phone)}</span></div>
+    <div class="intake-row">
+      <span class="intake-label">App 密碼</span>
+      <span class="intake-val" id="pw-display-${id}">${v(s.password)}</span>
+      <button class="btn btn-outline btn-sm" onclick="openChangePwModal('${id}')" style="flex-shrink:0;margin-left:8px">🔑 修改密碼</button>
+    </div>
+    <div class="intake-section-title">課程資訊</div>
+    <div class="intake-row">
+      <span class="intake-label">課程開始日期</span>
+      <input type="date" id="edit-start-${id}" value="${(s.start||'').replace(/\//g,'-')}"
+        style="border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;font-family:inherit;outline:none"
+        onchange="saveStudentInfo('${id}')">
+    </div>
+    <div class="intake-row">
+      <span class="intake-label">課程結束日期</span>
+      <input type="date" id="edit-end-${id}" value="${(s.end||'').replace(/\//g,'-')}"
+        style="border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;font-family:inherit;outline:none"
+        onchange="saveStudentInfo('${id}')">
+    </div>
+    <div class="intake-row">
+      <span class="intake-label">本期目標</span>
+      <input type="text" id="edit-goal-${id}" value="${s.goal||''}" placeholder="例：體重從 68kg 降至 65kg"
+        style="flex:1;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;font-family:inherit;outline:none"
+        onblur="saveStudentInfo('${id}')">
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-teal btn-sm" onclick="saveStudentInfo('${id}')">💾 儲存課程資訊</button>
+    </div>
+    <div style="margin-top:12px"><button class="btn btn-outline" onclick="openEditIntake('${id}','basic')">✏️ 編輯基本資料</button></div>`;
+
+  } else if (intakeTab === 'goals') {
+    bodyHTML = `
+    <div class="intake-section-title">目標設定</div>
+    <div class="intake-row"><span class="intake-label">目標體重</span><span class="intake-val">${intake.goalWeight ? intake.goalWeight + ' kg' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">目標體脂</span><span class="intake-val">${intake.goalFat ? intake.goalFat + ' %' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">預期達成時間</span><span class="intake-val">${v(intake.goalDeadline)}</span></div>
+    <div class="intake-row"><span class="intake-label">目前主要困擾</span><span class="intake-val">${v(intake.painPoint)}</span></div>
+    <div class="intake-row"><span class="intake-label">過去減重經歷</span><span class="intake-val">${v(intake.weightHistory)}</span></div>
+    <div class="intake-section-title">目前數值</div>
+    <div class="intake-row"><span class="intake-label">最新體重（App 紀錄）</span><span class="intake-val">${latestW ? latestW.weight + ' kg' : '學員尚未填寫'}</span></div>
+    <div style="margin-top:16px"><button class="btn btn-outline" onclick="openEditIntake('${id}','goals')">✏️ 編輯目標資料</button></div>`;
+
+  } else if (intakeTab === 'diet') {
+    bodyHTML = `
+    <div class="intake-section-title">三餐習慣</div>
+    <div class="intake-row"><span class="intake-label">平日三餐</span><span class="intake-val">${v(intake.weekdayMeal)}</span></div>
+    <div class="intake-row"><span class="intake-label">假日三餐</span><span class="intake-val">${v(intake.weekendMeal)}</span></div>
+    <div class="intake-row"><span class="intake-label">一餐飲食內容</span><span class="intake-val">${v(intake.mealContent)}</span></div>
+    <div class="intake-section-title">點心宵夜</div>
+    <div class="intake-row"><span class="intake-label">是否有點心/宵夜習慣</span><span class="intake-val">${v(intake.hasSnack)}</span></div>
+    <div class="intake-row"><span class="intake-label">吃點心的日子</span><span class="intake-val">${v(intake.snackDays)}</span></div>
+    <div class="intake-row"><span class="intake-label">吃點心的時間</span><span class="intake-val">${v(intake.snackTime)}</span></div>
+    <div class="intake-row"><span class="intake-label">常吃的點心及份量</span><span class="intake-val">${v(intake.snackContent)}</span></div>
+    <div class="intake-section-title">飲食偏好</div>
+    <div class="intake-row"><span class="intake-label">飲食偏好</span><span class="intake-val">${v(intake.dietPref)}</span></div>
+    <div class="intake-row"><span class="intake-label">飲食禁忌</span><span class="intake-val">${intake.dietTaboo ? `<span class="intake-tag warn">${intake.dietTaboo}</span>` : v(null)}</span></div>
+    <div class="intake-row"><span class="intake-label">食物過敏</span><span class="intake-val">${intake.foodAllergy ? `<span class="intake-tag warn">${intake.foodAllergy}</span>` : v(null)}</span></div>
+    <div style="margin-top:16px"><button class="btn btn-outline" onclick="openEditIntake('${id}','diet')">✏️ 編輯飲食習慣</button></div>`;
+
+  } else if (intakeTab === 'lifestyle') {
+    bodyHTML = `
+    <div class="intake-section-title">運動習慣</div>
+    <div class="intake-row"><span class="intake-label">運動頻率</span><span class="intake-val">${v(intake.exerciseFreq)}</span></div>
+    <div class="intake-row"><span class="intake-label">運動種類</span><span class="intake-val">${intake.exerciseTypes ? intake.exerciseTypes.split(',').map(e=>`<span class="intake-tag">${e.trim()}</span>`).join('') : v(null)}</span></div>
+    <div class="intake-section-title">作息</div>
+    <div class="intake-row"><span class="intake-label">每日飲水量</span><span class="intake-val">${intake.water ? intake.water + ' ml' : '<span class="empty">——</span>'}</span></div>
+    <div class="intake-row"><span class="intake-label">每日睡眠時數</span><span class="intake-val">${intake.sleep ? intake.sleep + ' 小時' : '<span class="empty">——</span>'}</span></div>
+    <div style="margin-top:16px"><button class="btn btn-outline" onclick="openEditIntake('${id}','lifestyle')">✏️ 編輯生活習慣</button></div>`;
+  }
+
+  const hasIntake = !!(intake.name || intake.age || intake.weight);
+
+  return `
+  <button class="back-link" onclick="intakeStudentId=null;document.getElementById('main-content').innerHTML=renderStudents()">‹ 返回學員列表</button>
+
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px">
+    <div class="student-avatar" style="width:52px;height:52px;font-size:20px;flex-shrink:0">${(s.name||'?').charAt(0)}</div>
+    <div style="flex:1">
+      <div style="font-size:20px;font-weight:900;color:var(--g9)">${s.name || '學員'}</div>
+      <div style="font-size:13px;color:var(--g4);margin-top:2px">${s.phone || ''} ｜ 第 ${s.period || 1} 期 ｜ ${s.start||''} – ${s.end||''}</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn btn-outline btn-sm" onclick="sendIntakeFormModal('${id}')">📋 傳建檔表單</button>
+      <button class="btn btn-teal btn-sm" onclick="openFeedbackForStudent('${id}','${todayStr()}')">🍱 查看飲食</button>
+    </div>
+  </div>
+
+  ${!hasIntake ? `<div class="notice amber">⚠️ 學員尚未建檔，請參考 Google 表單填寫結果，點下方各分頁的「編輯」按鈕建入資料。<a href="${INTAKE_FORM_URL}" target="_blank" style="margin-left:8px;color:var(--teal);font-weight:700">開啟建檔表單 →</a></div>` : ''}
+
+  <div class="card">
+    <div class="intake-tab-row">${tabHTML}</div>
+    ${bodyHTML}
+  </div>`;
+}
+
+function switchIntakeTab(id, tab) {
+  intakeTab = tab;
+  document.getElementById('main-content').innerHTML = renderIntakeCard(id);
+  window.scrollTo(0, 0);
+}
+
+function openEditIntake(id, section) {
+  const intake = gs(`intake_${id}`) || {};
+  let fields = '';
+
+  if (section === 'basic') {
+    fields = `
+      <div class="fld-row">
+        <div class="fld"><label>姓名</label><input id="ie-name" value="${intake.name||''}" placeholder="統一姓名"></div>
+        <div class="fld"><label>Email（Notion 帳號）</label><input id="ie-email" type="email" value="${intake.email||''}" placeholder="example@gmail.com"></div>
+      </div>
+      <div class="fld-row3">
+        <div class="fld"><label>性別</label>
+          <select id="ie-gender">
+            <option value="">選擇</option>
+            <option value="男" ${intake.gender==='男'?'selected':''}>男</option>
+            <option value="女" ${intake.gender==='女'?'selected':''}>女</option>
+            <option value="其他" ${intake.gender==='其他'?'selected':''}>其他</option>
+          </select>
+        </div>
+        <div class="fld"><label>年紀</label><input id="ie-age" type="number" value="${intake.age||''}" placeholder="歲"></div>
+        <div class="fld"><label>身高 (cm)</label><input id="ie-height" type="number" value="${intake.height||''}" step="0.1" placeholder="cm"></div>
+      </div>
+      <div class="fld-row3">
+        <div class="fld"><label>體重 (kg)</label><input id="ie-weight" type="number" value="${intake.weight||''}" step="0.1" placeholder="kg"></div>
+        <div class="fld"><label>體脂率 (%)</label><input id="ie-bodyfat" type="number" value="${intake.bodyFat||''}" step="0.1" placeholder="%"></div>
+        <div class="fld"><label>慢性疾病</label><input id="ie-disease" value="${intake.disease||''}" placeholder="若無填無"></div>
+      </div>
+      <div class="fld"><label>日常工作活動量</label><textarea id="ie-activity">${intake.activityLevel||''}</textarea></div>
+      <div class="fld"><label>服用藥物或保健品</label><textarea id="ie-med">${intake.medication||''}</textarea></div>`;
+  } else if (section === 'goals') {
+    fields = `
+      <div class="fld-row3">
+        <div class="fld"><label>目標體重 (kg)</label><input id="ie-gw" type="number" value="${intake.goalWeight||''}" step="0.1" placeholder="kg"></div>
+        <div class="fld"><label>目標體脂 (%)</label><input id="ie-gf" type="number" value="${intake.goalFat||''}" step="0.1" placeholder="%"></div>
+        <div class="fld"><label>預期達成時間</label><input id="ie-gd" value="${intake.goalDeadline||''}" placeholder="例：3個月"></div>
+      </div>
+      <div class="fld"><label>目前主要困擾</label><textarea id="ie-pain">${intake.painPoint||''}</textarea></div>
+      <div class="fld"><label>過去減重經歷</label><textarea id="ie-hist">${intake.weightHistory||''}</textarea></div>`;
+  } else if (section === 'diet') {
+    fields = `
+      <div class="fld"><label>平日三餐（外食/自備）</label><textarea id="ie-wdmeal">${intake.weekdayMeal||''}</textarea></div>
+      <div class="fld"><label>假日三餐（外食/自備）</label><textarea id="ie-wemeal">${intake.weekendMeal||''}</textarea></div>
+      <div class="fld"><label>一餐飲食內容大部分是什麼</label><textarea id="ie-mcontent">${intake.mealContent||''}</textarea></div>
+      <div class="fld-row">
+        <div class="fld"><label>是否有點心/宵夜習慣</label>
+          <select id="ie-hassnack">
+            <option value="">選擇</option>
+            <option value="有" ${intake.hasSnack==='有'?'selected':''}>有</option>
+            <option value="沒有" ${intake.hasSnack==='沒有'?'selected':''}>沒有</option>
+          </select>
+        </div>
+        <div class="fld"><label>吃點心的日子</label><input id="ie-sdays" value="${intake.snackDays||''}" placeholder="例：每天、週末"></div>
+      </div>
+      <div class="fld-row">
+        <div class="fld"><label>吃點心的時間</label><input id="ie-stime" value="${intake.snackTime||''}" placeholder="例：下午3點、睡前"></div>
+        <div class="fld"><label>常吃的點心及份量</label><input id="ie-scontent" value="${intake.snackContent||''}" placeholder="例：餅乾2包"></div>
+      </div>
+      <div class="fld"><label>飲食偏好</label><textarea id="ie-dpref">${intake.dietPref||''}</textarea></div>
+      <div class="fld-row">
+        <div class="fld"><label>飲食禁忌</label><input id="ie-dtaboo" value="${intake.dietTaboo||''}" placeholder="若無填無"></div>
+        <div class="fld"><label>食物過敏</label><input id="ie-fallergy" value="${intake.foodAllergy||''}" placeholder="若無填無"></div>
+      </div>`;
+  } else if (section === 'lifestyle') {
+    fields = `
+      <div class="fld"><label>運動頻率</label>
+        <select id="ie-exfreq">
+          <option value="">選擇</option>
+          <option value="完全沒在運動" ${intake.exerciseFreq==='完全沒在運動'?'selected':''}>完全沒在運動</option>
+          <option value="一週1-3次" ${intake.exerciseFreq==='一週1-3次'?'selected':''}>一週1-3次</option>
+          <option value="一週3次以上" ${intake.exerciseFreq==='一週3次以上'?'selected':''}>一週3次以上</option>
+        </select>
+      </div>
+      <div class="fld"><label>運動種類（多選用逗號分隔）</label><input id="ie-extypes" value="${intake.exerciseTypes||''}" placeholder="例：重訓, 慢跑, 快走"></div>
+      <div class="fld-row">
+        <div class="fld"><label>每日飲水量 (ml)</label><input id="ie-water" type="number" value="${intake.water||''}" placeholder="ml"></div>
+        <div class="fld"><label>每日睡眠時數 (小時)</label><input id="ie-sleep" type="number" value="${intake.sleep||''}" step="0.5" placeholder="小時"></div>
+      </div>`;
+  }
+
+  showModal(`編輯 ${['basic','goals','diet','lifestyle'].includes(section)?['基本資料','課程目標','飲食習慣','生活習慣'][['basic','goals','diet','lifestyle'].indexOf(section)]:''}`, fields, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '儲存', action: `saveIntake('${id}','${section}')`, style: 'btn-teal' }
+  ]);
+}
+
+function saveIntake(id, section) {
+  const intake = gs(`intake_${id}`) || {};
+  const g = sel => document.getElementById(sel)?.value?.trim() || '';
+
+  if (section === 'basic') {
+    Object.assign(intake, {
+      name: g('ie-name'), email: g('ie-email'), gender: g('ie-gender'),
+      age: g('ie-age'), height: g('ie-height'), weight: g('ie-weight'),
+      bodyFat: g('ie-bodyfat'), activityLevel: g('ie-activity'),
+      disease: g('ie-disease'), medication: g('ie-med')
+    });
+  } else if (section === 'goals') {
+    Object.assign(intake, {
+      goalWeight: g('ie-gw'), goalFat: g('ie-gf'), goalDeadline: g('ie-gd'),
+      painPoint: g('ie-pain'), weightHistory: g('ie-hist')
+    });
+  } else if (section === 'diet') {
+    Object.assign(intake, {
+      weekdayMeal: g('ie-wdmeal'), weekendMeal: g('ie-wemeal'), mealContent: g('ie-mcontent'),
+      hasSnack: g('ie-hassnack'), snackDays: g('ie-sdays'), snackTime: g('ie-stime'),
+      snackContent: g('ie-scontent'), dietPref: g('ie-dpref'),
+      dietTaboo: g('ie-dtaboo'), foodAllergy: g('ie-fallergy')
+    });
+  } else if (section === 'lifestyle') {
+    Object.assign(intake, {
+      exerciseFreq: g('ie-exfreq'), exerciseTypes: g('ie-extypes'),
+      water: g('ie-water'), sleep: g('ie-sleep')
+    });
+  }
+
+  ss(`intake_${id}`, intake);
+  closeModal();
+  showToast('✅ 建檔資料已儲存！');
+  document.getElementById('main-content').innerHTML = renderIntakeCard(id);
+}
+
+function openAddStudentModal() {
+  showModal('新增學員帳號', `
+    <div class="notice blue">💡 建立後請將帳號密碼提供給學員，學員使用手機號碼登入學員 App</div>
+    <div class="fld-row">
+      <div class="fld"><label>姓名</label><input type="text" id="new-name" placeholder="學員姓名"></div>
+      <div class="fld"><label>手機號碼（作為帳號）</label><input type="tel" id="new-phone" placeholder="09xxxxxxxx"></div>
+    </div>
+    <div class="fld-row">
+      <div class="fld"><label>初始密碼</label><input type="text" id="new-pw" placeholder="預設密碼" value="codare123"></div>
+      <div class="fld"><label>課程期別</label><input type="number" id="new-period" value="1" min="1"></div>
+    </div>
+    <div class="fld-row">
+      <div class="fld"><label>課程開始日期</label><input type="date" id="new-start" value="2026-05-25"></div>
+      <div class="fld"><label>課程結束日期</label><input type="date" id="new-end" value="2026-06-22"></div>
+    </div>
+    <div class="fld"><label>本期目標</label><input type="text" id="new-goal" placeholder="例：體重從 68kg 降至 65kg"></div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '建立學員帳號', action: 'submitAddStudent()', style: 'btn-teal' }
+  ]);
+}
+
+const INTAKE_FORM_URL = 'https://forms.gle/YBqHgPtz87x3mkp89';
+
+async function submitAddStudent() {
+  const name = document.getElementById('new-name')?.value?.trim();
+  const phone = document.getElementById('new-phone')?.value?.trim();
+  const pw = document.getElementById('new-pw')?.value?.trim();
+  const period = document.getElementById('new-period')?.value;
+  const start = document.getElementById('new-start')?.value?.replace(/-/g,'/');
+  const end = document.getElementById('new-end')?.value?.replace(/-/g,'/');
+  const goal = document.getElementById('new-goal')?.value?.trim();
+  if (!name || !phone || !pw) { showToast('請填寫姓名、手機號碼和密碼'); return; }
+
+  // Check for existing student — don't overwrite
+  const existing = STUDENTS_DB[phone] || gs(`dynuser_${phone}`);
+  if (existing && existing.name) {
+    showToast(`⚠️ 手機號碼 ${phone} 已存在（${existing.name}），請使用不同號碼`);
+    return;
+  }
+
+  const studentData = {
+    name, phone, password: pw,
+    period: Number(period) || 1,
+    start, end,
+    goal: goal || '',
+    rd: currentRD.id,
+    week: 1,
+    status: 'active',
+    currentWeek: 1
+  };
+
+  // 1. Write to in-memory STUDENTS_DB immediately
+  STUDENTS_DB[phone] = studentData;
+
+  // 2. Update in-memory cache immediately (so renderStudents sees it right away)
+  if (window._cache) _cache[`dynuser_${phone}`] = studentData;
+
+  // 3. Add to rd's student list — both cache and storage
+  if (!currentRD.students.includes(phone)) currentRD.students.push(phone);
+  const rdStudentList = gs(`rd_students_${currentRD.id}`) || [];
+  if (!rdStudentList.includes(phone)) rdStudentList.push(phone);
+  if (window._cache) _cache[`rd_students_${currentRD.id}`] = rdStudentList;
+
+  // 4. Persist to Firebase + localStorage (async, non-blocking)
+  ss(`dynuser_${phone}`, studentData);
+  ss(`rd_students_${currentRD.id}`, rdStudentList);
+  saveDynUser(phone, studentData);
+
+  closeModal();
+  document.getElementById('main-content').innerHTML = renderStudents();
+  showIntakeModal(name, phone, pw);
+}
+
+function saveStudentInfo(studentId) {
+  const startEl = document.getElementById(`edit-start-${studentId}`);
+  const endEl   = document.getElementById(`edit-end-${studentId}`);
+  const goalEl  = document.getElementById(`edit-goal-${studentId}`);
+  if (!startEl) return;
+
+  const start = startEl.value.replace(/-/g, '/');
+  const end   = endEl?.value?.replace(/-/g, '/') || '';
+  const goal  = goalEl?.value?.trim() || '';
+
+  // Update in-memory STUDENTS_DB
+  if (STUDENTS_DB[studentId]) {
+    STUDENTS_DB[studentId].start = start;
+    STUDENTS_DB[studentId].end   = end;
+    STUDENTS_DB[studentId].goal  = goal;
+  }
+
+  // Merge into dynuser data and save to Firebase + localStorage
+  // This syncs to the student app (student reads dynuser on login)
+  const dyn = gs(`dynuser_${studentId}`) || {};
+  dyn.start = start;
+  dyn.end   = end;
+  dyn.goal  = goal;
+  if (window._cache) _cache[`dynuser_${studentId}`] = dyn;
+  saveDynUser(studentId, dyn);   // Firebase write — student picks this up on next login
+
+  showToast('✅ 課程資訊已更新！學員重新登入後日期即同步');
+
+  // Refresh the intake card to reflect new dates
+  document.getElementById('main-content').innerHTML = renderIntakeCard(studentId);
+}
+
+function openChangePwModal(studentId) {
+  const s = STUDENTS_DB[studentId] || gs(`dynuser_${studentId}`) || {};
+  showModal('🔑 修改學員密碼', `
+    <div class="notice blue">💡 修改後請告知學員新密碼，學員下次登入時使用新密碼</div>
+    <div style="margin-bottom:14px;font-size:14px">學員：<strong>${s.name}</strong>　帳號：<strong>${s.phone}</strong></div>
+    <div class="fld">
+      <label>目前密碼</label>
+      <div style="padding:10px 12px;background:var(--g0);border:1px solid var(--g2);border-radius:8px;font-size:14px;color:var(--g6)">${s.password || '——'}</div>
+    </div>
+    <div class="fld">
+      <label>新密碼 *</label>
+      <input type="text" id="new-pw-input" placeholder="輸入新密碼" value="">
+    </div>
+    <div class="fld">
+      <label>確認新密碼 *</label>
+      <input type="text" id="new-pw-confirm" placeholder="再次輸入新密碼" value="">
+    </div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '確認修改', action: `submitChangePw('${studentId}')`, style: 'btn-teal' }
+  ]);
+}
+
+function submitChangePw(studentId) {
+  const np = document.getElementById('new-pw-input')?.value?.trim();
+  const nc = document.getElementById('new-pw-confirm')?.value?.trim();
+  if (!np) { showToast('請輸入新密碼'); return; }
+  if (np !== nc) { showToast('兩次密碼不一致，請確認'); return; }
+  if (np.length < 6) { showToast('密碼至少需要 6 個字元'); return; }
+
+  // Update in memory DB
+  if (STUDENTS_DB[studentId]) STUDENTS_DB[studentId].password = np;
+  // Update in Firebase + localStorage
+  const dyn = gs(`dynuser_${studentId}`) || {};
+  dyn.password = np;
+  saveDynUser(studentId, dyn);
+
+  closeModal();
+  showToast(`✅ 密碼已更新為：${np}　請告知學員 ${STUDENTS_DB[studentId]?.name || ''}！`);
+  // Refresh intake card to show new password
+  document.getElementById('main-content').innerHTML = renderIntakeCard(studentId);
+}
+
+function showIntakeModal(name, phone, pw) {
+  const msgLine1 = `嗨 ${name}！歡迎加入 Co-Dare 口袋營養獅 🦁`;
+  const msgLine2 = `在課程開始前，請先花 10-15 分鐘填寫以下建檔表單，讓營養師更了解你～`;
+  const msgLine3 = `📋 建檔表單：${INTAKE_FORM_URL}`;
+  const msgLine4 = `填完後請告訴我，我會幫你設定專屬的課程計畫！`;
+  const fullMsg = `${msgLine1}\n\n${msgLine2}\n\n${msgLine3}\n\n${msgLine4}`;
+
+  document.getElementById('modal-container').innerHTML = `
+    <div class="modal-overlay">
+      <div class="modal" style="max-width:520px">
+        <div class="modal-header">
+          <h2>🎉 學員建立成功！</h2>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+
+          <!-- Account info -->
+          <div style="background:var(--g0);border:1px solid var(--g2);border-radius:10px;padding:14px 16px;margin-bottom:16px">
+            <div style="font-size:12px;font-weight:700;color:var(--g4);margin-bottom:8px;letter-spacing:0.5px">學員帳號資訊</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+              <div><span style="color:var(--g4)">姓名：</span><strong>${name}</strong></div>
+              <div><span style="color:var(--g4)">帳號：</span><strong>${phone}</strong></div>
+              <div><span style="color:var(--g4)">密碼：</span><strong>${pw}</strong></div>
+              <div><span style="color:var(--g4)">登入 App：</span><strong>用手機號碼登入</strong></div>
+            </div>
+          </div>
+
+          <!-- Step prompt -->
+          <div style="font-size:13px;font-weight:700;color:var(--g7);margin-bottom:10px">📋 下一步：請傳送建檔表單給學員</div>
+          <div style="font-size:13px;color:var(--g5);margin-bottom:14px;line-height:1.6">
+            學員加入課程前需要先填寫建檔表單（約 10-15 分鐘），讓你了解他們的飲食習慣、生活作息和目標，方便制定個人化課程計畫。
+          </div>
+
+          <!-- Form link box -->
+          <div style="background:var(--teal-light);border:1.5px solid var(--teal);border-radius:10px;padding:14px 16px;margin-bottom:14px">
+            <div style="font-size:12px;font-weight:700;color:var(--teal-dark);margin-bottom:6px">📝 建檔表單連結</div>
+            <div style="font-size:13px;color:var(--teal-dark);word-break:break-all;margin-bottom:10px">${INTAKE_FORM_URL}</div>
+            <button class="btn btn-teal btn-sm" onclick="copyFormLink()">📋 複製連結</button>
+            <a href="${INTAKE_FORM_URL}" target="_blank" style="margin-left:8px">
+              <button class="btn btn-outline btn-sm" type="button">🔗 開啟表單預覽</button>
+            </a>
+          </div>
+
+          <!-- Copy full message -->
+          <div style="font-size:12px;font-weight:700;color:var(--g5);margin-bottom:6px">或複製完整訊息（可直接貼到 LINE 傳給學員）：</div>
+          <div style="background:var(--g0);border:1px solid var(--g2);border-radius:8px;padding:12px;font-size:13px;line-height:1.8;color:var(--g7);white-space:pre-line;margin-bottom:10px" id="full-msg-box">${fullMsg}</div>
+          <button class="btn btn-outline" style="width:100%" onclick="copyFullMsg()">📨 複製完整 LINE 訊息</button>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-teal" onclick="closeModal()">完成</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function copyFormLink() {
+  navigator.clipboard.writeText(INTAKE_FORM_URL).then(() => showToast('✅ 表單連結已複製！'));
+}
+
+function copyFullMsg() {
+  const box = document.getElementById('full-msg-box');
+  if (!box) return;
+  navigator.clipboard.writeText(box.innerText).then(() => showToast('✅ 訊息已複製，可直接貼到 LINE！'));
+}
+
+function sendIntakeFormModal(studentId) {
+  const s = STUDENTS_DB[studentId] || gs(`dynuser_${studentId}`);
+  if (!s) return;
+  showIntakeModal(s.name, s.phone, s.password || '——');
+}
+
+// ══════════════════════════════════════
+// BODY TRACKING
+// ══════════════════════════════════════
+let btStudentId = null;
+
+function renderBodyTrack() {
+  const students = getActiveStudents();
+  if (!btStudentId || !students.find(x => x.id === btStudentId)) {
+    btStudentId = students[0]?.id || null;
+  }
+  const s = students.find(x => x.id === btStudentId);
+
+  const studentTabs = students.map(st => {
+    const notif = gs(`body_notif_${st.id}`);
+    const hasNotif = notif && notif.notified && !notif.rdSeen;
+    return `<button class="btn ${btStudentId === st.id ? 'btn-teal' : 'btn-outline'}" style="font-size:13px;padding:7px 14px;position:relative" onclick="switchBtStudent('${st.id}')">
+      ${st.name}${hasNotif ? `<span style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;background:#ef4444;border-radius:50%;border:2px solid #fff"></span>` : ''}
+    </button>`;
+  }).join('');
+
+  if (!s) return `<div class="page-header"><h1>體態追蹤</h1></div><div class="empty-placeholder"><div class="ei">⚖️</div><p>尚無進行中學員</p></div>`;
+
+  // Body notif banner for current student
+  const bodyNotif = gs(`body_notif_${s.id}`);
+  const showBodyBanner = bodyNotif && bodyNotif.notified && !bodyNotif.rdSeen;
+  const bodyBannerHTML = showBodyBanner ? `
+    <div style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1.5px solid #3b82f6;border-radius:12px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px">
+      <div style="font-size:24px">⚖️</div>
+      <div style="flex:1">
+        <div style="font-weight:700;color:#1e40af;font-size:14px">📣 ${s.name} 已上傳體重並通知你！</div>
+        <div style="font-size:12px;color:#3b82f6;margin-top:2px">${bodyNotif.notifiedAt ? new Date(bodyNotif.notifiedAt).toLocaleString('zh-TW') : ''}</div>
+      </div>
+      <button class="btn btn-outline btn-sm" style="border-color:#3b82f6;color:#3b82f6;flex-shrink:0;font-size:12px" onclick="markBodyNotifSeen('${s.id}')">已確認</button>
+    </div>` : '';
+
+  const intake = gs(`intake_${s.id}`) || {};
+
+  // Dynamic weeks based on student's actual course dates
+  const sDates = buildStudentDates(s.start, s.end);
+  const wGroups = buildWeekGroups(sDates);
+  const totalWeeks = wGroups.length || 1;
+
+  // Build prog with correct number of weeks
+  const savedProg = gs(`progress_${s.id}`) || [];
+  const prog = Array.from({ length: totalWeeks }, (_, i) =>
+    savedProg[i] || { week: `W${i+1}`, weight: null, fat: null, waist: null, muscle: null }
+  );
+
+  // Stats
+  const startW  = intake.weight   ? parseFloat(intake.weight)   : null;
+  const startF  = intake.bodyFat  ? parseFloat(intake.bodyFat)  : null;
+  const latestW = [...prog].reverse().find(p => p && p.weight);
+  const latestF = [...prog].reverse().find(p => p && p.fat);
+  const goalW   = intake.goalWeight ? parseFloat(intake.goalWeight) : null;
+  const goalF   = intake.goalFat    ? parseFloat(intake.goalFat)    : null;
+
+  const diffW = (startW && latestW) ? (latestW.weight - startW).toFixed(1) : null;
+  const diffF = (startF && latestF) ? (latestF.fat - startF).toFixed(1) : null;
+  const remainW = (goalW && latestW) ? (latestW.weight - goalW).toFixed(1) : null;
+
+  // Mini sparkline data for weight
+  const wData = prog.map(p => p.weight || null);
+  const allW = wData.filter(Boolean);
+  const maxW = allW.length ? Math.max(...allW) : 70;
+  const minW = allW.length ? Math.min(...allW) : 60;
+  const range = (maxW - minW) || 1;
+
+  const sparkPoints = wData.map((w, i) => {
+    const x = 20 + i * 60;
+    const y = w ? 60 - ((w - minW) / range * 44) : null;
+    return { x, y, w };
+  });
+
+  const sparkLine = sparkPoints.filter(p => p.y !== null).map((p, i, arr) =>
+    i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`
+  ).join(' ');
+
+  const sparkDots = sparkPoints.filter(p => p.y !== null).map(p =>
+    `<circle cx="${p.x}" cy="${p.y}" r="5" fill="var(--teal)" stroke="#fff" stroke-width="2"/>
+     <text x="${p.x}" y="${p.y - 10}" text-anchor="middle" font-size="10" fill="var(--g5)">${p.w}kg</text>`
+  ).join('');
+
+  const sparkLabels = wGroups.map((wg, i) =>
+    `<text x="${20 + i*60}" y="78" text-anchor="middle" font-size="10" fill="var(--g4)">W${i+1}</text>`
+  ).join('');
+
+  // Table rows — editable inline
+  const rows = prog.map((p, i) => `
+    <tr>
+      <td class="fw7" style="color:var(--teal)">W${i+1}</td>
+      <td><input type="number" step="0.1" value="${p.weight || ''}" placeholder="--" style="width:70px;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center;font-family:inherit;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" data-si="${i}" data-sf="weight" onchange="updateBtProg(this,'${s.id}')"></td>
+      <td><input type="number" step="0.1" value="${p.fat || ''}" placeholder="--" style="width:60px;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center;font-family:inherit;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" data-si="${i}" data-sf="fat" onchange="updateBtProg(this,'${s.id}')"></td>
+      <td><input type="number" step="0.1" value="${p.waist || ''}" placeholder="--" style="width:60px;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center;font-family:inherit;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" data-si="${i}" data-sf="waist" onchange="updateBtProg(this,'${s.id}')"></td>
+      <td><input type="number" step="0.1" value="${p.muscle || ''}" placeholder="--" style="width:60px;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;text-align:center;font-family:inherit;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" data-si="${i}" data-sf="muscle" onchange="updateBtProg(this,'${s.id}')"></td>
+    </tr>`).join('');
+
+  return `
+  <div class="page-header">
+    <h1>體態追蹤</h1>
+    <p>追蹤每位學員的身體數值變化，對照建檔目標評估進度</p>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">${studentTabs}</div>
+
+  ${bodyBannerHTML}
+
+  <!-- Student header -->
+  <div class="card" style="margin-bottom:16px;padding:14px 18px">
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <div class="student-avatar" style="width:46px;height:46px;font-size:18px">${s.name.charAt(0)}</div>
+      <div style="flex:1">
+        <div class="fw7" style="font-size:15px">${s.name}</div>
+        <div class="text-muted">目標：${goalW ? `體重 ${goalW}kg` : '——'}${goalF ? `｜體脂 ${goalF}%` : ''}　建檔體重：${startW ? startW + 'kg' : '——'}　建檔體脂：${startF ? startF + '%' : '——'}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        <button class="btn btn-outline btn-sm" onclick="refreshBodyTrack('${s.id}')">🔄 同步學員最新數值</button>
+        <button class="btn btn-outline btn-sm" onclick="openIntakeCard('${s.id}');showSection('students')">查看建檔資料</button>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:12px;color:var(--g4);background:var(--g0);border-radius:6px;padding:6px 10px">
+      💡 學員在 App 填寫體重後，點「🔄 同步學員最新數值」即可看到最新資料。營養師也可直接在欄位輸入更正。
+    </div>
+  </div>
+
+  <!-- Summary stats -->
+  <div class="grid4" style="margin-bottom:16px">
+    <div class="stat-box">
+      <div class="stat-val" style="font-size:22px">${latestW ? latestW.weight + 'kg' : '——'}</div>
+      <div class="stat-label">最新體重</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" style="font-size:22px;color:${diffW !== null ? (diffW < 0 ? 'var(--teal)' : 'var(--red)') : 'var(--g8)'}">${diffW !== null ? (diffW > 0 ? '+' : '') + diffW + 'kg' : '——'}</div>
+      <div class="stat-label">與建檔相比</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" style="font-size:22px;color:${remainW !== null ? (remainW <= 0 ? 'var(--teal)' : 'var(--amber)') : 'var(--g8)'}">${remainW !== null ? (remainW > 0 ? '還差 ' + remainW + 'kg' : '已達標 🎉') : '——'}</div>
+      <div class="stat-label">距離目標</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" style="font-size:22px">${latestF ? latestF.fat + '%' : '——'}</div>
+      <div class="stat-label">最新體脂</div>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  ${allW.length > 0 ? `<div class="card" style="margin-bottom:16px">
+    <div class="card-title">📈 體重趨勢</div>
+    <svg width="100%" viewBox="0 0 280 90" style="overflow:visible">
+      <polyline points="${sparkPoints.filter(p=>p.y!==null).map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="var(--teal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="${sparkLine} L${sparkPoints.filter(p=>p.y!==null).slice(-1)[0].x},68 L${sparkPoints.filter(p=>p.y!==null)[0].x},68 Z" fill="var(--teal)" opacity="0.08"/>
+      ${sparkDots}
+      ${sparkLabels}
+    </svg>
+  </div>` : ''}
+
+  <!-- Per-week: data + plan side by side -->
+  ${Array.from({ length: totalWeeks }, (_, i) => i).map(i => {
+    const p = prog[i] || {};
+    const plan = gs(`wplan_${s.id}_${i+1}`) || {};
+    const wLabel = wGroups[i] ? wGroups[i].label : `W${i+1}`;
+
+    // CPVFDO badge renderer
+    const parseCPV = str => {
+      if (!str) return '<span style="color:var(--g3);font-size:12px">——</span>';
+      return str.split('｜').map(part => {
+        const letter = part.trim().charAt(0);
+        const colors = {C:'#fef3c7,#92400e',P:'#ffe4e6,#9f1239',V:'#dcfce7,#166534',F:'#fce7f3,#9d174d',D:'#e0f2fe,#075985',O:'#f5f3ff,#5b21b6'};
+        const c = colors[letter] ? colors[letter].split(',') : ['#f3f4f6','#374151'];
+        return `<span style="display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;background:${c[0]};color:${c[1]};margin:2px 3px 2px 0">${part.trim()}</span>`;
+      }).join('');
+    };
+
+    return `<div class="card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="font-size:15px;font-weight:700;color:var(--teal)">${wLabel}</div>
+        <button class="btn btn-outline btn-sm" onclick="wpStudentId='${s.id}';wpWeek=${i+1};showSection('weekplan')">✏️ 編輯週計畫</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <!-- Left: Body numbers -->
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--g4);letter-spacing:0.5px;margin-bottom:8px;text-transform:uppercase">體態數值</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            ${[
+              { label:'體重', field:'weight', unit:'kg', id:`bt-w${i}-weight` },
+              { label:'體脂', field:'fat',    unit:'%',  id:`bt-w${i}-fat`    },
+              { label:'腰圍', field:'waist',  unit:'cm', id:`bt-w${i}-waist`  },
+              { label:'肌肉', field:'muscle', unit:'kg', id:`bt-w${i}-muscle` }
+            ].map(col => `
+              <div style="background:var(--g0);border-radius:8px;padding:8px 10px">
+                <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${col.label}</div>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <input type="number" step="0.1" id="${col.id}" value="${p[col.field] || ''}" placeholder="--"
+                    style="width:52px;border:1.5px solid var(--g2);border-radius:6px;padding:4px 6px;font-size:13px;font-weight:700;text-align:center;font-family:inherit;outline:none;background:#fff"
+                    onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
+                    data-si="${i}" data-sf="${col.field}" onchange="updateBtProg(this,'${s.id}')">
+                  <span style="font-size:11px;color:var(--g4)">${col.unit}</span>
+                </div>
+              </div>`).join('')}
+          </div>
+          <button class="btn btn-teal btn-sm" style="margin-top:10px;width:100%" onclick="saveBtProgWeek('${s.id}',${i})">💾 儲存 W${i+1} 數值</button>
+        </div>
+
+        <!-- Right: Week plan -->
+        <div>
+          <div style="font-size:11px;font-weight:700;color:var(--g4);letter-spacing:0.5px;margin-bottom:8px;text-transform:uppercase">週計畫</div>
+          ${plan.calories || plan.breakfast ? `
+            ${plan.calories ? `<div style="margin-bottom:6px;font-size:13px"><span style="color:var(--g5)">熱量：</span><strong>${plan.calories}</strong></div>` : ''}
+            ${plan.breakfast ? `<div style="margin-bottom:6px">
+              <div style="font-size:11px;color:var(--g4);margin-bottom:3px">早餐</div><div>${parseCPV(plan.breakfast)}</div>
+            </div>` : ''}
+            ${plan.lunch ? `<div style="margin-bottom:6px">
+              <div style="font-size:11px;color:var(--g4);margin-bottom:3px">午餐</div><div>${parseCPV(plan.lunch)}</div>
+            </div>` : ''}
+            ${plan.dinner ? `<div style="margin-bottom:6px">
+              <div style="font-size:11px;color:var(--g4);margin-bottom:3px">晚餐</div><div>${parseCPV(plan.dinner)}</div>
+            </div>` : ''}
+            ${plan.snack ? `<div style="margin-bottom:6px">
+              <div style="font-size:11px;color:var(--g4);margin-bottom:3px">點心</div><div>${parseCPV(plan.snack)}</div>
+            </div>` : ''}
+            ${(() => {
+              // Show total: manual if entered, otherwise auto-calc
+              if (plan.total) return `<div style="margin-bottom:6px;padding:6px 8px;background:var(--teal-light);border-radius:6px"><div style="font-size:10px;color:var(--teal-dark);font-weight:700;margin-bottom:3px">整天合計</div><div>${parseCPV(plan.total)}</div></div>`;
+              // Auto-calc
+              const keys = ['C','P','V','F','D','O'];
+              const totals = {C:0,P:0,V:0,F:0,D:0,O:0};
+              [plan.breakfast, plan.lunch, plan.dinner, plan.snack].filter(Boolean).forEach(str => {
+                str.split('｜').forEach(part => {
+                  const t = part.trim(); const letter = t.charAt(0);
+                  if (keys.includes(letter)) { const n = parseFloat(t.replace(letter,'').trim()); if (!isNaN(n)) totals[letter] += n; }
+                });
+              });
+              const hasAny = Object.values(totals).some(v => v > 0);
+              if (!hasAny) return '';
+              const totalStr = keys.map(k => totals[k] > 0 ? `${k} ${totals[k]%1===0?totals[k]:totals[k].toFixed(1)}` : null).filter(Boolean).join('｜');
+              return `<div style="margin-bottom:6px;padding:6px 8px;background:var(--teal-light);border-radius:6px"><div style="font-size:10px;color:var(--teal-dark);font-weight:700;margin-bottom:3px">整天合計</div><div>${parseCPV(totalStr)}</div></div>`;
+            })()}
+            ${plan.exercise ? `<div style="margin-bottom:4px;font-size:12px;color:var(--g6);line-height:1.5"><span style="color:var(--g4)">運動：</span>${plan.exercise}</div>` : ''}
+            ${plan.note ? `<div style="font-size:12px;color:var(--g6);line-height:1.5"><span style="color:var(--g4)">備註：</span>${plan.note}</div>` : ''}
+          ` : `<div style="color:var(--g3);font-size:13px;padding:16px 0;text-align:center">尚未設定週計畫<br><button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="wpStudentId='${s.id}';wpWeek=${i+1};showSection('weekplan')">前往設定</button></div>`}
+        </div>
+      </div>
+    </div>`;
+  }).join('')}
+
+  <!-- Notes -->
+  <div class="card">
+    <div class="card-title">📝 追蹤備註</div>
+    <textarea id="bt-note" rows="3" style="width:100%;border:1.5px solid var(--g2);border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;resize:vertical;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" placeholder="記錄本學員的身體狀況變化觀察、特殊備註…">${gs(`btNote_${s.id}`) || ''}</textarea>
+    <div style="display:flex;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-outline" onclick="saveBtNote('${s.id}')">儲存備註</button>
+    </div>
+  </div>`;
+}
+
+function markBodyNotifSeen(studentId) {
+  const notif = gs(`body_notif_${studentId}`) || {};
+  notif.rdSeen = true;
+  notif.rdSeenAt = new Date().toISOString();
+  ss(`body_notif_${studentId}`, notif);
+  showToast('✅ 已確認');
+  document.getElementById('main-content').innerHTML = renderBodyTrack();
+  updateBadge();
+}
+
+function switchBtStudent(id) {
+  btStudentId = id;
+  document.getElementById('main-content').innerHTML = renderBodyTrack();
+  window.scrollTo(0, 0);
+}
+
+function refreshBodyTrack(studentId) {
+  // Data is already in shared localStorage — just re-render to pull latest values
+  showToast('🔄 已同步學員最新數值');
+  document.getElementById('main-content').innerHTML = renderBodyTrack();
+  window.scrollTo(0, 0);
+}
+
+function updateBtProg(el, studentId) {
+  const i = parseInt(el.dataset.si);
+  const f = el.dataset.sf;
+  const prog = gs(`progress_${studentId}`) || [{},{},{},{}];
+  while (prog.length < 4) prog.push({});
+  prog[i] = prog[i] || {};
+  prog[i][f] = el.value ? parseFloat(el.value) : null;
+  prog[i].week = 'W' + (i+1);
+  ss(`progress_${studentId}`, prog);
+}
+
+function saveBtProg(studentId) {
+  showNotifyDialog(
+    studentId, 'bodytrack', '體態追蹤',
+    () => NOTIFY_DEFAULTS.bodytrack('')
+  );
+  document.getElementById('main-content').innerHTML = renderBodyTrack();
+}
+
+function saveBtProgWeek(studentId, weekIdx) {
+  showToast(`✅ W${weekIdx+1} 數值已儲存！`);
+  document.getElementById('main-content').innerHTML = renderBodyTrack();
+  window.scrollTo(0, 0);
+}
+
+function saveBtNote(studentId) {
+  const note = document.getElementById('bt-note')?.value || '';
+  ss(`btNote_${studentId}`, note);
+  showToast('✅ 備註已儲存');
+}
+
+// ══════════════════════════════════════
+// WEEK PLAN
+// ══════════════════════════════════════
+let wpStudentId = null;
+let wpWeek = 1;
+
+function renderWeekplan() {
+  const students = getActiveStudents();
+  // Validate wpStudentId — reset if not in active list
+  if (!wpStudentId || !students.find(x => x.id === wpStudentId)) {
+    wpStudentId = students[0]?.id || null;
+    wpWeek = 1;
+  }
+  const s = students.find(x => x.id === wpStudentId);
+
+  const studentTabs = students.map(st => `
+    <button class="btn ${wpStudentId === st.id ? 'btn-teal' : 'btn-outline'}" style="font-size:13px;padding:7px 14px" onclick="switchWpStudent('${st.id}')">${st.name}</button>`).join('');
+
+  if (!s) return `<div class="page-header"><h1>週計畫設定</h1></div><div class="empty-placeholder"><div class="ei">📋</div><p>尚無進行中學員</p></div>`;
+
+  // Dynamic weeks based on student's course dates
+  const sDates = buildStudentDates(s.start, s.end);
+  const wGroups = buildWeekGroups(sDates);
+  const totalWeeks = wGroups.length || 1;
+
+  // Clamp wpWeek to valid range
+  if (wpWeek > totalWeeks) wpWeek = 1;
+
+  const weekTabs = wGroups.map((wg, wi) => `
+    <button class="day-chip ${wi+1 === wpWeek ? 'active' : ''}" onclick="switchWpWeek(${wi+1})">${wg.label}</button>`).join('');
+
+  const plan = gs(`wplan_${s.id}_${wpWeek}`) || {};
+  const curGroup = wGroups[wpWeek - 1];
+  const autoDate = curGroup ? `${curGroup.dates[0]} – ${curGroup.dates[curGroup.dates.length-1]}` : '';
+
+  return `
+  <div class="page-header">
+    <h1>週計畫設定</h1>
+    <p>為每位學員設定每週熱量、份數分配與備註</p>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">${studentTabs}</div>
+
+  <div class="card" style="margin-bottom:16px;padding:14px 18px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="student-avatar">${s.name.charAt(0)}</div>
+      <div>
+        <div class="fw7">${s.name}｜${s.goal}</div>
+        <div class="text-muted">課程期間：${s.start || '——'} – ${s.end || '——'}（共 ${totalWeeks} 週）</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="day-nav" style="margin-bottom:16px;flex-wrap:wrap">${weekTabs}</div>
+
+  <div class="card">
+    <div class="card-title">📅 W${wpWeek} 基本設定 <span style="font-size:12px;font-weight:400;color:var(--g4)">${autoDate}</span></div>
+    <div class="fld-row">
+      <div class="fld"><label>日期範圍</label><input type="text" id="wp-date" value="${plan.date || autoDate}" placeholder="自動填入"></div>
+      <div class="fld"><label>熱量設定（大卡）</label><input type="number" id="wp-cal" value="${plan.calories ? plan.calories.replace(/[^0-9]/g,'') : ''}" placeholder="1600" inputmode="numeric"></div>
+    </div>
+    <div class="fld-row3">
+      <div class="fld"><label>體重 kg</label><input type="number" id="wp-wt" value="${plan.weight || ''}" placeholder="--" step="0.1"></div>
+      <div class="fld"><label>體脂 %</label><input type="number" id="wp-fat" value="${plan.fat || ''}" placeholder="--" step="0.1"></div>
+      <div class="fld"><label>腰圍 cm</label><input type="number" id="wp-waist" value="${plan.waist || ''}" placeholder="--" step="0.1"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🍽️ 餐次份數分配（C 全穀｜P 豆魚蛋肉｜V 蔬菜｜F 水果｜D 乳品｜O 油脂）</div>
+    <div class="fld-row">
+      <div class="fld"><label>早餐</label><input type="text" id="wp-b" value="${plan.breakfast || ''}" placeholder="C 1.5｜P 2｜V 1｜F 0｜D 0.5｜O 1"></div>
+      <div class="fld"><label>午餐</label><input type="text" id="wp-l" value="${plan.lunch || ''}" placeholder="C 2｜P 3｜V 2｜F 0｜D 0｜O 1.5"></div>
+    </div>
+    <div class="fld-row">
+      <div class="fld"><label>晚餐</label><input type="text" id="wp-d" value="${plan.dinner || ''}" placeholder="C 1.5｜P 2｜V 2｜F 1｜D 0｜O 1"></div>
+      <div class="fld"><label>點心</label><input type="text" id="wp-s" value="${plan.snack || ''}" placeholder="C 0｜P 0｜V 0｜F 1｜D 1｜O 0"></div>
+    </div>
+    <div class="fld">
+      <label>整天份數合計（可手動填入或留空讓系統自動計算）</label>
+      <input type="text" id="wp-total" value="${plan.total || ''}" placeholder="自動計算，或手動填：C 5｜P 7｜V 5｜F 2｜D 1.5｜O 3.5">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🎯 本週小目標（學員 App 的「每週小目標」頁面）</div>
+    <div id="wp-goals-list" style="margin-bottom:10px">
+      ${(() => {
+        const wGoals = gs(`goals_${s.id}_${wpWeek}`) || [];
+        if (!wGoals.length) return `<div style="color:var(--g4);font-size:13px;padding:4px 0">尚未設定目標，請新增</div>`;
+        return wGoals.map((g, i) => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <input type="text" id="wp-goal-${i}" value="${g.text || ''}" style="flex:1;padding:8px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" placeholder="目標描述…">
+            <button class="btn btn-sm" style="background:#fff;border:1.5px solid var(--red);color:var(--red);border-radius:8px;padding:6px 10px;cursor:pointer;flex-shrink:0;font-size:13px" onclick="removeWpGoal(${i})">✕</button>
+          </div>`).join('');
+      })()}
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="addWpGoal()">＋ 新增目標</button>
+    <div style="font-size:11px;color:var(--g4);margin-top:6px">儲存週計畫時會一起儲存，學員可在 App 打勾完成</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🏃 運動與備註</div>
+    <div class="fld"><label>運動建議</label><textarea id="wp-ex" placeholder="例：每週至少運動 3 天，每次 30 分鐘有氧或重訓">${plan.exercise || ''}</textarea></div>
+    <div class="fld"><label>備註（飲水、睡眠、其他注意事項）</label><textarea id="wp-note" placeholder="例：每天飲水至少 1500ml，睡前 2 小時不進食…">${plan.note || ''}</textarea></div>
+  </div>
+
+  <div style="display:flex;justify-content:flex-end;gap:8px">
+    <button class="btn btn-teal" onclick="saveWeekplan('${s.id}',${wpWeek})">💾 儲存週計畫 → 同步至學員</button>
+  </div>`;
+}
+
+function switchWpStudent(id) { wpStudentId = id; wpWeek = 1; document.getElementById('main-content').innerHTML = renderWeekplan(); }
+function switchWpWeek(w) { wpWeek = w; document.getElementById('main-content').innerHTML = renderWeekplan(); }
+
+// ══════════════════════════════════════
+// 通知學員對話框（通用）
+// ══════════════════════════════════════
+const NOTIFY_DEFAULTS = {
+  weekplan: (week) => `📋 W${week} 週計畫已更新！本週的熱量設定、餐次份數分配與每週小目標都已設定好，請到「身體數值」頁面查看本週計畫，一起加油！`,
+  bodytrack: () => `⚖️ 體態追蹤資料已更新！營養師已記錄最新數值，請到「身體數值」查看你的進度與變化趨勢。`,
+  menu: (period) => `🥗 第 ${period} 期菜單已更新！本週的客製化菜單已上線，請到「菜單」頁面查看，按照菜單吃讓效果更好！`,
+  materials: () => `📚 新教材已上傳！營養師為你上傳了新的學習資料，請到「教材」頁面查看，有助於了解均衡飲食的知識！`,
+};
+
+function showNotifyDialog(studentId, type, titleLabel, defaultMsgFn, onSaveFirst) {
+  // First execute the save operation
+  if (onSaveFirst) onSaveFirst();
+
+  const defaultMsg = typeof defaultMsgFn === 'function' ? defaultMsgFn() : defaultMsgFn;
+
+  showModal(`📣 通知學員：${titleLabel}`, `
+    <div style="margin-bottom:12px;font-size:13px;color:var(--g5)">
+      儲存成功！請輸入要傳給 <strong>${getStudentName(studentId)}</strong> 的通知內容，或點「用預設文字」快速填入。
+    </div>
+    <textarea id="notify-msg-input" rows="5"
+      style="width:100%;border:1.5px solid var(--g2);border-radius:10px;padding:12px;font-size:13px;font-family:inherit;resize:vertical;outline:none;line-height:1.7;box-sizing:border-box"
+      onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
+      placeholder="輸入通知內容…"></textarea>
+    <button class="btn btn-outline btn-sm" style="margin-top:8px;font-size:12px" onclick="document.getElementById('notify-msg-input').value=\`${defaultMsg.replace(/`/g,'&#96;')}\`">
+      ✨ 用預設文字
+    </button>
+  `, [
+    { label: '取消（不通知）', action: 'closeModal()', style: 'btn-outline' },
+    { label: '📣 送出通知給學員', action: `doSendNotify('${studentId}','${type}')`, style: 'btn-teal' }
+  ]);
+}
+
+function getStudentName(id) {
+  const all = [...getActiveStudents(), ...getMyStudents()];
+  return all.find(s => s.id === id)?.name || id;
+}
+
+function doSendNotify(studentId, type) {
+  const msg = document.getElementById('notify-msg-input')?.value?.trim();
+  if (!msg) { showToast('請輸入通知內容或使用預設文字'); return; }
+  const typeIconMap = { weekplan:'📋', bodytrack:'⚖️', menu:'🥗', materials:'📚', general:'📬' };
+  const typeTitleMap = { weekplan:'週計畫已更新', bodytrack:'體態資料已更新', menu:'菜單已更新', materials:'新教材上傳', general:'來自營養師的通知' };
+  pushInbox(studentId, {
+    type,
+    title: `${typeIconMap[type]||'📬'} ${typeTitleMap[type]||'通知'}`,
+    body: msg
+  });
+  closeModal();
+  showToast('📣 已成功通知學員！');
+}
+
+function saveWeekplan(studentId, week) {
+  const cal = document.getElementById('wp-cal')?.value;
+  const plan = {
+    date: document.getElementById('wp-date')?.value || '',
+    calories: cal ? cal + ' 大卡' : '',
+    weight: document.getElementById('wp-wt')?.value || '',
+    fat: document.getElementById('wp-fat')?.value || '',
+    waist: document.getElementById('wp-waist')?.value || '',
+    breakfast: document.getElementById('wp-b')?.value || '',
+    lunch: document.getElementById('wp-l')?.value || '',
+    dinner: document.getElementById('wp-d')?.value || '',
+    snack: document.getElementById('wp-s')?.value || '',
+    total: document.getElementById('wp-total')?.value || '',
+    exercise: document.getElementById('wp-ex')?.value || '',
+    note: document.getElementById('wp-note')?.value || ''
+  };
+  ss(`wplan_${studentId}_${week}`, plan);
+
+  const goalInputs = document.querySelectorAll('[id^="wp-goal-"]');
+  const goals = Array.from(goalInputs).map((el, i) => {
+    const existing2 = gs(`goals_${studentId}_${week}`) || [];
+    return { text: el.value.trim(), done: existing2[i]?.done || false };
+  }).filter(g => g.text);
+  ss(`goals_${studentId}_${week}`, goals);
+
+  showNotifyDialog(
+    studentId, 'weekplan', `W${week} 週計畫`,
+    () => NOTIFY_DEFAULTS.weekplan(week)
+  );
+}
+
+function addWpGoal() {
+  const list = document.getElementById('wp-goals-list');
+  if (!list) return;
+  const idx = list.querySelectorAll('[id^="wp-goal-"]').length;
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+  div.innerHTML = `
+    <input type="text" id="wp-goal-${idx}" style="flex:1;padding:8px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none" onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'" placeholder="目標描述…">
+    <button class="btn btn-sm" style="background:#fff;border:1.5px solid var(--red);color:var(--red);border-radius:8px;padding:6px 10px;cursor:pointer;flex-shrink:0;font-size:13px" onclick="this.parentElement.remove()">✕</button>`;
+  list.appendChild(div);
+  div.querySelector('input')?.focus();
+}
+
+function removeWpGoal(i) {
+  document.querySelector(`[id="wp-goal-${i}"]`)?.closest('div')?.remove();
+}
+
+// ══════════════════════════════════════
+// MENU MANAGER
+// ══════════════════════════════════════
+let menuStudentId = null;
+
+function renderMenuMgr() {
+  const students = getActiveStudents();
+  if (!menuStudentId) menuStudentId = students[0]?.id || null;
+  const s = students.find(x => x.id === menuStudentId);
+
+  const studentTabs = students.map(st => `
+    <button class="btn ${menuStudentId === st.id ? 'btn-teal' : 'btn-outline'}" style="font-size:13px;padding:7px 14px" onclick="switchMenuStudent('${st.id}')">${st.name}</button>`).join('');
+
+  if (!s) return `<div class="page-header"><h1>菜單管理</h1></div>`;
+
+  const allMenus = gs(`menus_${s.id}`) || {};
+  const periods = Object.keys(allMenus).map(Number).sort();
+  const hasPeriod1 = allMenus[1];
+
+  const DAYS = ['一','二','三','四','五','六','日'];
+  const getDay = (p, di, meal) => allMenus[p]?.days?.[di]?.[meal] || '';
+
+  const buildEditorForPeriod = (p) => {
+    const days = DAYS.map((name, di) => `
+      <div class="menu-day-editor">
+        <div class="menu-day-header">週${name}</div>
+        <div class="menu-day-body">
+          <div>
+            <div class="menu-meal-label">早餐</div>
+            <textarea id="m-${p}-${di}-b" rows="2" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;resize:none;outline:none" placeholder="早餐內容…">${getDay(p,di,'breakfast')}</textarea>
+          </div>
+          <div>
+            <div class="menu-meal-label">午餐</div>
+            <textarea id="m-${p}-${di}-l" rows="2" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;resize:none;outline:none" placeholder="午餐內容…">${getDay(p,di,'lunch')}</textarea>
+          </div>
+          <div>
+            <div class="menu-meal-label">晚餐</div>
+            <textarea id="m-${p}-${di}-d" rows="2" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;resize:none;outline:none" placeholder="晚餐內容…">${getDay(p,di,'dinner')}</textarea>
+          </div>
+          <div>
+            <div class="menu-meal-label">點心</div>
+            <textarea id="m-${p}-${di}-s" rows="2" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;resize:none;outline:none" placeholder="點心…">${getDay(p,di,'snack')}</textarea>
+          </div>
+          <div style="grid-column:1/-1">
+            <div class="menu-meal-label" style="color:var(--teal-dark)">份數分配（C 全穀｜P 豆蛋魚肉｜V 蔬｜F 果｜D 奶｜O 油）</div>
+            <input type="text" id="m-${p}-${di}-cpv" value="${getDay(p,di,'cpvfdo')}" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;outline:none" placeholder="例：C 2｜P 4｜V 3｜F 2｜D 1｜O 2.5">
+          </div>
+        </div>
+      </div>`).join('');
+
+    return `
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title" style="margin:0">🥗 第 ${p} 期菜單（一週份）</div>
+          <button class="btn btn-sm" style="background:var(--red-light);color:var(--red);border:1.5px solid var(--red);border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px;font-family:inherit;font-weight:700"
+            onclick="confirmDeleteMenu('${s.id}',${p})">🗑️ 刪除此期</button>
+        </div>
+        <div class="fld-row" style="margin-bottom:14px">
+          <div class="fld"><label>期別標題</label><input type="text" id="mlabel-${p}" value="${allMenus[p]?.label || `第${p}期菜單`}" placeholder="例：第一期（2026/05/25 – 06/22）"></div>
+          <div class="fld"><label>備註說明</label><input type="text" id="mnote-${p}" value="${allMenus[p]?.note || '每週參照此份菜單循環使用，可依實際狀況彈性調整'}" placeholder="備註…"></div>
+        </div>
+        ${days}
+        <div style="display:flex;justify-content:flex-end;margin-top:12px">
+          <button class="btn btn-teal" onclick="saveMenu('${s.id}',${p})">💾 儲存第 ${p} 期菜單 → 同步學員</button>
+        </div>
+      </div>`;
+  };
+
+  const editorsHTML = periods.length > 0 ? periods.map(p => buildEditorForPeriod(p)).join('') : buildEditorForPeriod(1);
+
+  return `
+  <div class="page-header">
+    <h1>菜單管理</h1>
+    <p>為學員建立客製化一週菜單，儲存後立即同步至學員 App</p>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">${studentTabs}</div>
+
+  <div class="card" style="margin-bottom:16px;padding:14px 18px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="student-avatar">${s.name.charAt(0)}</div>
+      <div>
+        <div class="fw7">${s.name}｜目標：${s.goal}</div>
+        <div class="text-muted">第 ${s.period} 期｜共 ${periods.length} 份菜單</div>
+      </div>
+    </div>
+  </div>
+
+  ${editorsHTML}
+
+  <button class="btn btn-outline" style="margin-top:4px" onclick="addMenuPeriod('${s.id}')">＋ 新增期別菜單（續約用）</button>`;
+}
+
+function switchMenuStudent(id) { menuStudentId = id; document.getElementById('main-content').innerHTML = renderMenuMgr(); }
+
+function saveMenu(studentId, period) {
+  const allMenus = gs(`menus_${studentId}`) || {};
+  const DAYS = ['一','二','三','四','五','六','日'];
+  const days = DAYS.map((name, di) => ({
+    name,
+    breakfast: document.getElementById(`m-${period}-${di}-b`)?.value || '',
+    lunch:     document.getElementById(`m-${period}-${di}-l`)?.value || '',
+    dinner:    document.getElementById(`m-${period}-${di}-d`)?.value || '',
+    snack:     document.getElementById(`m-${period}-${di}-s`)?.value || '',
+    cpvfdo:    document.getElementById(`m-${period}-${di}-cpv`)?.value || ''
+  }));
+  allMenus[period] = {
+    label: document.getElementById(`mlabel-${period}`)?.value || `第${period}期菜單`,
+    note: document.getElementById(`mnote-${period}`)?.value || '',
+    days
+  };
+  ss(`menus_${studentId}`, allMenus);
+  showNotifyDialog(
+    studentId, 'menu', `第 ${period} 期菜單`,
+    () => NOTIFY_DEFAULTS.menu(period)
+  );
+}
+
+function addMenuPeriod(studentId) {
+  const allMenus = gs(`menus_${studentId}`) || {};
+  const periods = Object.keys(allMenus).map(Number);
+  const nextP = periods.length > 0 ? Math.max(...periods) + 1 : 1;
+  allMenus[nextP] = { label: `第${nextP}期菜單`, note: '每週參照此份菜單循環使用', days: [] };
+  ss(`menus_${studentId}`, allMenus);
+  showToast(`✅ 已新增第 ${nextP} 期菜單，請填寫內容後儲存`);
+  document.getElementById('main-content').innerHTML = renderMenuMgr();
+}
+
+function confirmDeleteMenu(studentId, period) {
+  showModal(`🗑️ 刪除第 ${period} 期菜單`, `
+    <div class="notice amber">⚠️ 確定要刪除「第 ${period} 期菜單」嗎？刪除後學員 App 的菜單頁將看不到此期內容，且無法復原。</div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '確定刪除', action: `deleteMenu('${studentId}',${period})`, style: 'btn-teal' }
+  ]);
+}
+
+function deleteMenu(studentId, period) {
+  const allMenus = gs(`menus_${studentId}`) || {};
+  delete allMenus[period];
+  ss(`menus_${studentId}`, allMenus);
+  closeModal();
+  showToast(`🗑️ 第 ${period} 期菜單已刪除`);
+  document.getElementById('main-content').innerHTML = renderMenuMgr();
+}
+
+// ══════════════════════════════════════
+// MATERIALS
+// ══════════════════════════════════════
+let matStudentId = null;
+
+function renderMaterials() {
+  const students = getActiveStudents();
+  if (!matStudentId) matStudentId = students[0]?.id || null;
+  const s = students.find(x => x.id === matStudentId);
+
+  const studentTabs = students.map(st => `
+    <button class="btn ${matStudentId === st.id ? 'btn-teal' : 'btn-outline'}" style="font-size:13px;padding:7px 14px" onclick="switchMatStudent('${st.id}')">${st.name}</button>`).join('');
+
+  if (!s) return `<div class="page-header"><h1>教材管理</h1></div>`;
+
+  const now = Date.now();
+  const ONE_YEAR = 365 * 24 * 60 * 60 * 1000;
+  const rawItems = gs(`ency_${s.id}`) || [];
+
+  // Mark expired items and flag them
+  const encyItems = rawItems.map(item => ({
+    ...item,
+    isExpired: item.uploadedAt && (now - item.uploadedAt) > ONE_YEAR,
+    daysLeft: item.uploadedAt ? Math.max(0, Math.ceil((item.uploadedAt + ONE_YEAR - now) / 86400000)) : null
+  }));
+
+  const encyRows = encyItems.length ? encyItems.map((item, i) => {
+    const typeIcon = item.fileType === 'pdf' ? '📄' : item.fileType === 'image' ? '🖼️' : item.fileType === 'link' ? '🔗' : (item.icon || '📋');
+    const expiryBadge = item.isExpired
+      ? `<span style="color:var(--red);font-size:11px;font-weight:700">已到期</span>`
+      : item.daysLeft !== null
+        ? `<span style="color:var(--g4);font-size:11px">剩 ${item.daysLeft} 天</span>`
+        : '<span style="color:var(--g4);font-size:11px">—</span>';
+    const actionBtn = item.fileData
+      ? `<button class="btn btn-outline btn-sm" onclick="previewEncy(${i},'${s.id}')">預覽</button>`
+      : item.linkUrl
+        ? `<a href="${item.linkUrl}" target="_blank" rel="noopener"><button class="btn btn-outline btn-sm" type="button">開啟連結</button></a>`
+        : '';
+    return `<tr style="${item.isExpired ? 'opacity:0.5' : ''}">
+      <td style="white-space:nowrap">${typeIcon} ${item.title}${item.isExpired ? ' <span style="color:var(--red);font-size:11px">（到期）</span>' : ''}</td>
+      <td style="max-width:200px;word-break:break-all">${item.descLabel || item.desc || ''}${item.fileName && item.descLabel !== item.fileName ? `<div style="font-size:11px;color:var(--g4);margin-top:2px">${item.fileName}</div>` : ''}${item.linkUrl ? `<div style="font-size:11px;color:var(--teal);margin-top:2px">${item.linkUrl.slice(0,50)}…</div>` : ''}</td>
+      <td style="white-space:nowrap">${expiryBadge}</td>
+      <td style="white-space:nowrap">
+        ${actionBtn}
+        <button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="deleteEncy('${s.id}',${i})">刪除</button>
+      </td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--g3)">尚未上傳任何教材</td></tr>';
+
+  return `
+  <div class="page-header">
+    <h1>教材管理</h1>
+    <p>為每位學員上傳專屬六大類食物份數估算寶典，上傳後一年內可反覆觀看</p>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">${studentTabs}</div>
+
+  <div class="card" style="margin-bottom:16px;padding:14px 18px">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="student-avatar">${s.name.charAt(0)}</div>
+      <div>
+        <div class="fw7">${s.name}｜${s.goal}</div>
+        <div class="text-muted">目前共 ${encyItems.length} 份教材，其中 ${encyItems.filter(x=>x.isExpired).length} 份已到期</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📚 教材管理</div>
+    <div class="notice blue">💡 選擇教材分類後，說明欄會自動變成對應的下拉選單，上傳後學員 App 會顯示在正確位置</div>
+
+    <table class="tbl" style="margin-bottom:16px">
+      <thead><tr><th>分類</th><th>說明/章節</th><th>到期</th><th>操作</th></tr></thead>
+      <tbody>${encyRows}</tbody>
+    </table>
+
+    <div class="divider"></div>
+    <div class="card-title" style="font-size:13px;margin-bottom:12px">上傳新教材</div>
+
+    <div class="fld-row">
+      <div class="fld">
+        <label>教材分類 *</label>
+        <select id="ency-title" onchange="onEncyCategoryChange()">
+          <option value="">請選擇教材類型</option>
+          <option value="六大類食物份數估算寶典">📋 六大類食物份數估算寶典</option>
+          <option value="線上教學影片">🎥 線上教學影片</option>
+        </select>
+      </div>
+      <div class="fld">
+        <label id="ency-desc-label">說明</label>
+        <div id="ency-desc-wrap">
+          <input type="text" id="ency-desc-text" placeholder="請先選擇教材分類" disabled
+            style="width:100%;padding:9px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:var(--g1);color:var(--g4)">
+          <select id="ency-desc-select" style="display:none;width:100%;padding:9px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff">
+            <option value="">請選擇...</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload type toggle -->
+    <div class="fld">
+      <label>內容類型</label>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button type="button" id="tab-file" class="btn btn-teal btn-sm" onclick="switchEncyTab('file')">📂 上傳檔案</button>
+        <button type="button" id="tab-link" class="btn btn-outline btn-sm" onclick="switchEncyTab('link')">🔗 貼上連結</button>
+      </div>
+
+      <!-- File upload -->
+      <div id="ency-file-section">
+        <div id="ency-drop-zone" style="border:2px dashed var(--g3);border-radius:10px;padding:24px;text-align:center;cursor:pointer;transition:border-color 0.2s;background:var(--g0)"
+          onclick="document.getElementById('ency-file-input').click()"
+          ondragover="event.preventDefault();this.style.borderColor='var(--teal)'"
+          ondragleave="this.style.borderColor='var(--g3)'"
+          ondrop="handleEncyDrop(event)">
+          <div style="font-size:26px;margin-bottom:6px">📂</div>
+          <div style="font-size:13px;color:var(--g5)">點此上傳 或 拖曳檔案至此（可一次選取多個）</div>
+          <div style="font-size:11px;color:var(--g4);margin-top:3px">支援 PDF、JPG、PNG｜最多一次上傳 20 個</div>
+        </div>
+        <input type="file" id="ency-file-input" accept=".pdf,image/*" multiple style="display:none" onchange="handleEncyFileSelect(event)">
+        <div id="ency-file-preview" style="margin-top:8px;font-size:13px;color:var(--teal);display:none"></div>
+      </div>
+
+      <!-- Link input -->
+      <div id="ency-link-section" style="display:none">
+        <input type="url" id="ency-link-url" placeholder="貼上影片或教材連結，例：https://youtu.be/xxxxx"
+          style="width:100%;padding:10px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none"
+          onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'">
+        <div style="font-size:12px;color:var(--g4);margin-top:6px">支援 YouTube、Google Drive、Vimeo 等任何網址</div>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:4px">
+      <button class="btn btn-teal" onclick="addEncy('${s.id}')">＋ 新增至學員教材</button>
+    </div>
+  </div>
+
+  <!-- Hidden preview modal trigger -->
+  <div id="ency-preview-container"></div>`;
+}
+
+// Temp storage for selected file data
+let pendingEncyFile = null;
+let encyTabMode = 'file'; // 'file' | 'link'
+
+const ENCY_COURSE_OPTIONS = [
+  { val: 'course_1',  label: '線上課程 1｜認識熱量與熱量赤字' },
+  { val: 'course_2',  label: '線上課程 2｜健檢報告解密' },
+  { val: 'course_3',  label: '線上課程 3｜豆魚蛋肉類' },
+  { val: 'course_4',  label: '線上課程 4｜全穀雜糧類' },
+  { val: 'course_5',  label: '線上課程 5｜蔬菜水果類' },
+  { val: 'course_6',  label: '線上課程 6｜油脂類' },
+  { val: 'course_7',  label: '線上課程 7｜運動營養' },
+  { val: 'course_8',  label: '線上課程 8｜外食技巧交戰守則' },
+  { val: 'course_9',  label: '線上課程 9｜看懂營養標示／嘴饞點心不用怕' },
+  { val: 'course_10', label: '線上課程 10｜保健品全攻略' }
+];
+
+const ENCY_FOOD_OPTIONS = [
+  { val: 'food_grain',   label: '全穀雜糧類' },
+  { val: 'food_dairy',   label: '乳品類' },
+  { val: 'food_protein', label: '豆魚蛋肉類' },
+  { val: 'food_veg',     label: '蔬菜類' },
+  { val: 'food_fruit',   label: '水果類' },
+  { val: 'food_fat',     label: '油脂類' }
+];
+
+function onEncyCategoryChange() {
+  const cat = document.getElementById('ency-title')?.value;
+  const textInput = document.getElementById('ency-desc-text');
+  const selectInput = document.getElementById('ency-desc-select');
+  const label = document.getElementById('ency-desc-label');
+
+  if (!cat) {
+    textInput.style.display = ''; textInput.disabled = true; textInput.value = ''; textInput.placeholder = '請先選擇教材分類';
+    selectInput.style.display = 'none';
+    return;
+  }
+
+  textInput.style.display = 'none';
+  selectInput.style.display = '';
+
+  let options = [];
+  if (cat === '線上教學影片') {
+    label.textContent = '對應課程章節 *';
+    options = ENCY_COURSE_OPTIONS;
+  } else if (cat === '六大類食物份數估算寶典') {
+    label.textContent = '食物類別 *';
+    options = ENCY_FOOD_OPTIONS;
+  }
+
+  selectInput.innerHTML = '<option value="">請選擇...</option>' +
+    options.map(o => `<option value="${o.val}">${o.label}</option>`).join('');
+}
+
+function getEncyDesc() {
+  const selectInput = document.getElementById('ency-desc-select');
+  const textInput = document.getElementById('ency-desc-text');
+  if (selectInput && selectInput.style.display !== 'none') return selectInput.value;
+  return textInput?.value?.trim() || '';
+}
+
+function switchEncyTab(mode) {
+  encyTabMode = mode;
+  document.getElementById('ency-file-section').style.display = mode === 'file' ? '' : 'none';
+  document.getElementById('ency-link-section').style.display = mode === 'link' ? '' : 'none';
+  document.getElementById('tab-file').className = 'btn btn-sm ' + (mode === 'file' ? 'btn-teal' : 'btn-outline');
+  document.getElementById('tab-link').className = 'btn btn-sm ' + (mode === 'link' ? 'btn-teal' : 'btn-outline');
+  if (mode === 'link') pendingEncyFile = null;
+}
+
+// pendingEncyFiles — array for multi-file batch upload
+let pendingEncyFiles = [];
+
+function handleEncyFileSelect(event) {
+  const files = Array.from(event.target.files).slice(0, 20);
+  if (!files.length) return;
+  readEncyFiles(files);
+}
+
+function handleEncyDrop(event) {
+  event.preventDefault();
+  document.getElementById('ency-drop-zone').style.borderColor = 'var(--g3)';
+  const files = Array.from(event.dataTransfer.files).slice(0, 20);
+  if (!files.length) return;
+  readEncyFiles(files);
+}
+
+function readEncyFiles(files) {
+  const preview = document.getElementById('ency-file-preview');
+  if (preview) { preview.innerHTML = `⏳ 讀取中… 共 ${files.length} 個檔案`; preview.style.display = 'block'; }
+  pendingEncyFiles = [];
+  let loaded = 0;
+  files.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      pendingEncyFiles.push({ name: file.name, type: file.type, data: e.target.result, sizeMB: (file.size/1024/1024).toFixed(1) });
+      loaded++;
+      if (loaded === files.length) {
+        if (preview) {
+          preview.innerHTML = files.map(f => {
+            const icon = f.type === 'application/pdf' ? '📄' : '🖼️';
+            return `${icon} ${f.name}`;
+          }).join('<br>') + `<br>✅ ${files.length} 個檔案已選取`;
+        }
+      }
+    };
+    reader.onerror = () => { loaded++; };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Legacy single-file support (kept for compat)
+function readEncyFile(file) { readEncyFiles([file]); }
+
+function previewEncy(idx, studentId) {
+  const items = gs(`ency_${studentId}`) || [];
+  const item = items[idx];
+  if (!item || !item.fileData) return;
+  if (item.fileType === 'pdf') {
+    const w = window.open();
+    w.document.write(`<iframe src="${item.fileData}" width="100%" height="100%" style="border:none"></iframe>`);
+  } else {
+    const w = window.open();
+    w.document.write(`<img src="${item.fileData}" style="max-width:100%;display:block;margin:auto">`);
+  }
+}
+
+function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendingEncyFiles = []; encyTabMode = 'file'; document.getElementById('main-content').innerHTML = renderMaterials(); }
+
+function addEncy(studentId) {
+  const title = document.getElementById('ency-title')?.value?.trim();
+  const desc = getEncyDesc();   // selected option value = catKey or course_N
+  if (!title) { showToast('請選擇教材類型'); return; }
+  if (!desc) { showToast('請選擇說明/章節'); return; }
+
+  const category = title === '線上教學影片' ? 'course' : 'ency';
+  // catKey is the stable routing key; desc is for display in RD table
+  const catKey = desc;  // e.g. 'food_grain', 'course_1'
+
+  // Human-readable label for RD table display
+  const descLabel = (() => {
+    if (category === 'course') {
+      const opt = ENCY_COURSE_OPTIONS.find(o => o.val === desc);
+      return opt ? opt.label : desc;
+    } else {
+      const opt = ENCY_FOOD_OPTIONS.find(o => o.val === desc);
+      return opt ? opt.label : desc;
+    }
+  })();
+
+  try {
+    const existingItems = gs(`ency_${studentId}`) || [];
+
+    if (encyTabMode === 'link') {
+      const url = document.getElementById('ency-link-url')?.value?.trim();
+      if (!url) { showToast('請貼上連結網址'); return; }
+      existingItems.push({
+        title, desc: catKey, catKey, descLabel, category,
+        uploadedAt: Date.now(), uploadedAtStr: new Date().toLocaleDateString('zh-TW'),
+        linkUrl: url, fileType: 'link',
+        icon: category === 'course' ? '🎥' : '📋'
+      });
+    } else if (pendingEncyFiles.length > 0) {
+      pendingEncyFiles.forEach(f => {
+        const fileType = f.type === 'application/pdf' ? 'pdf' : 'image';
+        existingItems.push({
+          title,
+          desc: catKey,   // ← always the routing key, NOT the filename
+          catKey,
+          descLabel: pendingEncyFiles.length === 1 ? descLabel : `${descLabel} — ${f.name}`,
+          fileName: f.name,
+          category,
+          uploadedAt: Date.now(), uploadedAtStr: new Date().toLocaleDateString('zh-TW'),
+          fileData: f.data, fileType,
+          icon: fileType === 'pdf' ? '📄' : '🖼️'
+        });
+      });
+    } else {
+      existingItems.push({
+        title, desc: catKey, catKey, descLabel, category,
+        uploadedAt: Date.now(), uploadedAtStr: new Date().toLocaleDateString('zh-TW'),
+        icon: category === 'course' ? '🎥' : '📋', fileType: 'none'
+      });
+    }
+
+    ss(`ency_${studentId}`, existingItems);
+    const count = pendingEncyFiles.length || 1;
+    pendingEncyFile = null;
+    pendingEncyFiles = [];
+    showToast(`✅ 已新增 ${count} 份教材！`);
+    document.getElementById('main-content').innerHTML = renderMaterials();
+    // Show notify dialog
+    showNotifyDialog(
+      studentId, 'materials', '教材上傳',
+      () => NOTIFY_DEFAULTS.materials()
+    );
+  } catch(e) {
+    showToast('⚠️ 儲存空間不足，建議改用「貼上連結」方式上傳大型檔案');
+  }
+}
+
+function deleteEncy(studentId, idx) {
+  const items = gs(`ency_${studentId}`) || [];
+  items.splice(idx, 1);
+  ss(`ency_${studentId}`, items);
+  showToast('🗑️ 已刪除');
+  document.getElementById('main-content').innerHTML = renderMaterials();
+}
+
+// ══════════════════════════════════════
+// ACCOUNTS (superAdmin only)
+// ══════════════════════════════════════
+function renderAccounts() {
+  if (!currentRD.superAdmin) return `<div class="page-header"><h1>無權限</h1></div><div class="empty-placeholder"><p>此頁面僅限超級管理員使用</p></div>`;
+
+  // Combine static + dynamic RD accounts (superAdmin only can see all)
+  const allRds = [
+    ...Object.entries(RD_USERS_STATIC).map(([id, u]) => ({ id, ...u, isStatic: true })),
+    ...Object.entries(DYNAMIC_RD_USERS).map(([id, u]) => ({ id, ...u, isStatic: false }))
+  ];
+
+  const rows = allRds.map(u => `
+    <tr>
+      <td>
+        <div class="fw7">${u.name}</div>
+        <div class="text-muted">${u.id}</div>
+      </td>
+      <td>
+        <span style="font-family:monospace;background:var(--g1);padding:2px 8px;border-radius:4px;font-size:12px">${u.password}</span>
+      </td>
+      <td>${u.superAdmin
+        ? '<span class="pill active">超級管理員</span>'
+        : '<span class="pill" style="background:var(--teal-light);color:var(--teal-dark);border:1px solid var(--teal)">Co-Dare 營養師</span>'
+      }</td>
+      <td>
+        ${!u.isStatic
+          ? `<button class="btn btn-outline btn-sm" onclick="changeRdPw('${u.id}')">改密碼</button>
+             <button class="btn btn-outline btn-sm" style="margin-left:4px;color:var(--red);border-color:var(--red)" onclick="deleteRdUser('${u.id}','${u.name}')">刪除</button>`
+          : '<span class="text-muted">系統帳號</span>'}
+      </td>
+    </tr>`).join('');
+
+  return `
+  <div class="page-header">
+    <h1>帳號管理</h1>
+    <p>管理所有營養師帳號。只有超級管理員可以新增/刪除其他營養師。</p>
+  </div>
+
+  <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+    <button class="btn btn-teal" onclick="openAddRdModal()">＋ 新增 Co-Dare 營養師帳號</button>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="tbl">
+      <thead><tr><th>營養師</th><th>密碼</th><th>權限</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>
+
+  <div class="notice amber" style="margin-top:16px">
+    ⚠️ Co-Dare 營養師帳號擁有飲食回覆、學員管理、菜單、教材等所有功能，但<strong>不能</strong>查看或管理其他營養師帳號。
+  </div>`;
+}
+
+function openAddRdModal() {
+  showModal('新增營養師帳號', `
+    <div class="notice blue">💡 新增後請告知帳號密碼，該營養師即可登入後台使用所有功能</div>
+    <div class="fld-row">
+      <div class="fld"><label>帳號（英文，不含空格）*</label><input type="text" id="new-rd-id" placeholder="例：samuel" style="text-transform:lowercase"></div>
+      <div class="fld"><label>顯示名稱 *</label><input type="text" id="new-rd-name" placeholder="例：Samuel 營養師"></div>
+    </div>
+    <div class="fld"><label>密碼 *</label><input type="text" id="new-rd-pw" placeholder="建議至少8碼英數混合"></div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '建立帳號', action: 'submitAddRd()', style: 'btn-teal' }
+  ]);
+}
+
+async function submitAddRd() {
+  const id = document.getElementById('new-rd-id')?.value?.trim().toLowerCase();
+  const name = document.getElementById('new-rd-name')?.value?.trim();
+  const pw = document.getElementById('new-rd-pw')?.value?.trim();
+  if (!id || !name || !pw) { showToast('請填寫所有欄位'); return; }
+  if (RD_USERS_STATIC[id] || DYNAMIC_RD_USERS[id]) { showToast('此帳號已存在'); return; }
+  if (pw.length < 6) { showToast('密碼至少 6 個字元'); return; }
+  const newRd = { name, password: pw, superAdmin: false, students: [] };
+  DYNAMIC_RD_USERS[id] = newRd;
+  ss('rduser_' + id, newRd);
+  closeModal();
+  showToast(`✅ 帳號「${name}」已建立！帳號：${id}，密碼：${pw}`);
+  document.getElementById('main-content').innerHTML = renderAccounts();
+}
+
+function changeRdPw(id) {
+  showModal('修改密碼', `
+    <div class="fld"><label>帳號</label><div style="padding:8px;background:var(--g0);border-radius:6px;font-size:13px">${id}</div></div>
+    <div class="fld"><label>新密碼 *</label><input type="text" id="chg-rd-pw" placeholder="輸入新密碼"></div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '確認修改', action: `doChangeRdPw('${id}')`, style: 'btn-teal' }
+  ]);
+}
+
+async function doChangeRdPw(id) {
+  const pw = document.getElementById('chg-rd-pw')?.value?.trim();
+  if (!pw || pw.length < 6) { showToast('密碼至少 6 個字元'); return; }
+  if (DYNAMIC_RD_USERS[id]) DYNAMIC_RD_USERS[id].password = pw;
+  const existing = gs('rduser_' + id) || {};
+  existing.password = pw;
+  ss('rduser_' + id, existing);
+  closeModal();
+  showToast(`✅ 密碼已更新`);
+  document.getElementById('main-content').innerHTML = renderAccounts();
+}
+
+async function deleteRdUser(id, name) {
+  if (!confirm(`確定要刪除「${name}」的帳號嗎？`)) return;
+  delete DYNAMIC_RD_USERS[id];
+  ss('rduser_' + id, null);
+  showToast(`🗑️ 已刪除帳號「${name}」`);
+  document.getElementById('main-content').innerHTML = renderAccounts();
+}
+
+// ══════════════════════════════════════
+// MODAL
+// ══════════════════════════════════════
+function showModal(title, bodyHTML, buttons = []) {
+  const btnsHTML = buttons.map(b => `<button class="btn ${b.style}" onclick="${b.action}">${b.label}</button>`).join('');
+  document.getElementById('modal-container').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>${title}</h2>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">${bodyHTML}</div>
+        <div class="modal-footer">${btnsHTML}</div>
+      </div>
+    </div>`;
+}
+function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
+</script>
+</body>
+</html>
