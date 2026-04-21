@@ -1026,6 +1026,8 @@ function showSection(sec) {
     el.innerHTML = (renders[sec] || renderDashboard)();
     updateBadge();
     window.scrollTo(0, 0);
+    // 週計畫頁面：渲染後立即計算整天合計
+    if (sec === 'weekplan') setTimeout(autoCalcTotal, 80);
   }, 60);
 }
 
@@ -2859,7 +2861,7 @@ function renderWeekplan() {
     }).join('')}
     <div style="background:var(--teal-light);border-radius:8px;padding:10px 12px;margin-top:4px">
       <div style="font-size:12px;font-weight:700;color:var(--teal-dark);margin-bottom:4px">整天份數合計（自動計算）</div>
-      <div id="wp-total-display" style="font-size:13px;color:var(--teal-dark);font-weight:600">計算中…</div>
+      <div id="wp-total-display" style="font-size:13px;color:var(--teal-dark);font-weight:600">——</div>
       <input type="hidden" id="wp-total">
     </div>
   </div>
@@ -2892,8 +2894,16 @@ function renderWeekplan() {
   </div>`;
 }
 
-function switchWpStudent(id) { wpStudentId = id; wpWeek = 1; document.getElementById('main-content').innerHTML = renderWeekplan(); }
-function switchWpWeek(w) { wpWeek = w; document.getElementById('main-content').innerHTML = renderWeekplan(); }
+function switchWpStudent(id) {
+  wpStudentId = id; wpWeek = 1;
+  document.getElementById('main-content').innerHTML = renderWeekplan();
+  setTimeout(autoCalcTotal, 50);
+}
+function switchWpWeek(w) {
+  wpWeek = w;
+  document.getElementById('main-content').innerHTML = renderWeekplan();
+  setTimeout(autoCalcTotal, 50);
+}
 
 // ══════════════════════════════════════
 // 通知學員對話框（通用）
@@ -2945,6 +2955,40 @@ function doSendNotify(studentId, type) {
   });
   closeModal();
   showToast('📣 已成功通知學員！');
+}
+
+// ── 週計畫份數：從下拉選單組合字串 ──
+function buildMealStr(mealKey) {
+  const cats = ['c','p','v','f','d','o'];
+  const labels = ['C','P','V','F','D','O'];
+  return labels.map((L, i) => {
+    const el = document.getElementById(`wp-${mealKey}-${cats[i]}`);
+    const v = el ? parseFloat(el.value) || 0 : 0;
+    return `${L} ${v}`;
+  }).join('｜');
+}
+
+function buildTotalStr() {
+  const meals = ['b','l','d','s'];
+  const cats = ['c','p','v','f','d','o'];
+  const labels = ['C','P','V','F','D','O'];
+  const totals = labels.map((L, i) => {
+    let sum = 0;
+    meals.forEach(m => {
+      const el = document.getElementById(`wp-${m}-${cats[i]}`);
+      sum += el ? parseFloat(el.value) || 0 : 0;
+    });
+    return `${L} ${sum % 1 === 0 ? sum : sum.toFixed(1)}`;
+  });
+  return totals.join('｜');
+}
+
+function autoCalcTotal() {
+  const totalStr = buildTotalStr();
+  const display = document.getElementById('wp-total-display');
+  const hidden = document.getElementById('wp-total');
+  if (display) display.textContent = totalStr;
+  if (hidden) hidden.value = totalStr;
 }
 
 function saveWeekplan(studentId, week) {
