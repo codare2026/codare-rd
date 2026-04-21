@@ -659,18 +659,7 @@ const RD_USERS_STATIC = {
   shengwei:  { password: 'CoDare@wei',  name: '勝崴營養師', superAdmin: true, students: [] }
 };
 
-// Sync static accounts to Supabase on load
-(async function syncStaticAccounts() {
-  for (const [id, u] of Object.entries(RD_USERS_STATIC)) {
-    try {
-      const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.rduser_${id}&select=key`, { headers: SB_HDRS });
-      if (res.ok) {
-        const rows = await res.json();
-        if (!rows.length) await sbWrite('rduser_' + id, u);
-      }
-    } catch(e) {}
-  }
-})();
+// Static RD accounts are hardcoded - no need to sync on load
 
 function getRdUser(id) {
   return RD_USERS_STATIC[id] || DYNAMIC_RD_USERS[id] || gs('rduser_' + id) || null;
@@ -732,11 +721,18 @@ async function doRdLogin() {
   const pw = document.getElementById('rd-pw').value;
   const keep = document.getElementById('rd-keep').checked;
 
-  let u = RD_USERS_STATIC[id] || null;
-  try {
-    const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.rduser_${id}&select=value`, { headers: SB_HDRS });
-    if (res.ok) { const rows = await res.json(); if (rows[0]?.value) u = rows[0].value; }
-  } catch(e) { if (!u) u = gs('rduser_' + id); }
+  // 靜態帳號直接比對，不需要 fetch（最快）
+  let u = RD_USERS_STATIC[id] || gs('rduser_' + id) || null;
+  // 動態帳號才查 Supabase（加上短 timeout）
+  if (!u) {
+    try {
+      const res = await Promise.race([
+        fetch(`${SB_URL}/rest/v1/cd?key=eq.rduser_${encodeURIComponent(id)}&select=value`, { headers: SB_HDRS }),
+        new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 2000))
+      ]);
+      if (res.ok) { const rows = await res.json(); if (rows[0]?.value) u = rows[0].value; }
+    } catch(e) {}
+  }
 
   if (u && u.password === pw) {
     currentRD = { ...u, id };
@@ -814,12 +810,15 @@ function doRdLogout() {
     try {
       const saved = JSON.parse(localStorage.getItem('cd_rd_autologin'));
       if (saved && saved.id && saved.pw) {
-        let u = RD_USERS_STATIC[saved.id];
+        let u = RD_USERS_STATIC[saved.id] || gs('rduser_' + saved.id) || null;
         if (!u) {
           try {
-            const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.rduser_${saved.id}&select=value`, { headers: SB_HDRS });
+            const res = await Promise.race([
+              fetch(`${SB_URL}/rest/v1/cd?key=eq.rduser_${encodeURIComponent(saved.id)}&select=value`, { headers: SB_HDRS }),
+              new Promise((_, r) => setTimeout(() => r(new Error('t')), 2000))
+            ]);
             if (res.ok) { const rows = await res.json(); if (rows[0]?.value) u = rows[0].value; }
-          } catch(e) { u = gs('rduser_' + saved.id); }
+          } catch(e) {}
         }
         if (u && u.password === saved.pw) {
           currentRD = { ...u, id: saved.id };
@@ -3177,7 +3176,7 @@ function saveMenu(studentId, period) {
         return `${cat} ${v}`;
       });
       return parts.join('｜');
-    })()''
+    })()
   }));
   allMenus[period] = {
     label: document.getElementById(`mlabel-${period}`)?.value || `第${period}期菜單`,
