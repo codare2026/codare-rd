@@ -804,37 +804,40 @@ function doRdLogout() {
   Object.keys(_cache).forEach(k => delete _cache[k]);
 }
 
-// Auto-login
+// Auto-login：最多等 0.3 秒，之後直接顯示登入畫面
 (function() {
-  setTimeout(async () => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('cd_rd_autologin'));
-      if (saved && saved.id && saved.pw) {
-        let u = RD_USERS_STATIC[saved.id] || gs('rduser_' + saved.id) || null;
-        if (!u) {
-          try {
-            const res = await Promise.race([
-              fetch(`${SB_URL}/rest/v1/cd?key=eq.rduser_${encodeURIComponent(saved.id)}&select=value`, { headers: SB_HDRS }),
-              new Promise((_, r) => setTimeout(() => r(new Error('t')), 2000))
-            ]);
-            if (res.ok) { const rows = await res.json(); if (rows[0]?.value) u = rows[0].value; }
-          } catch(e) {}
-        }
-        if (u && u.password === saved.pw) {
-          currentRD = { ...u, id: saved.id };
-          preloadLocalCache(); // 瞬間啟動
-          document.getElementById('rd-loading-screen').style.display = 'none';
-          document.getElementById('login-screen').style.display = 'none';
-          launchRdApp();
-          // 背景同步
-          setTimeout(async () => { try { await warmCache(); updateBadge(); } catch(e) {} }, 300);
-          return;
-        }
-      }
-    } catch(e) {}
+  const showLogin = () => {
     document.getElementById('rd-loading-screen').style.display = 'none';
     document.getElementById('login-screen').style.display = 'flex';
-  }, 400);
+  };
+  // 保險機制：最多等 1.5 秒，超過直接顯示登入
+  const fallback = setTimeout(showLogin, 1500);
+
+  (async () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('cd_rd_autologin'));
+      if (!saved?.id || !saved?.pw) { clearTimeout(fallback); showLogin(); return; }
+
+      // 靜態帳號直接比對（不需要 fetch）
+      const u = RD_USERS_STATIC[saved.id] || gs('rduser_' + saved.id);
+      if (u && u.password === saved.pw) {
+        clearTimeout(fallback);
+        currentRD = { ...u, id: saved.id };
+        preloadLocalCache();
+        document.getElementById('rd-loading-screen').style.display = 'none';
+        document.getElementById('login-screen').style.display = 'none';
+        launchRdApp();
+        setTimeout(async () => { try { await warmCache(); updateBadge(); } catch(e) {} }, 500);
+        return;
+      }
+      // 找不到就顯示登入畫面
+      clearTimeout(fallback);
+      showLogin();
+    } catch(e) {
+      clearTimeout(fallback);
+      showLogin();
+    }
+  })();
 })();
 
 document.getElementById('rd-pw').addEventListener('keydown', e => { if (e.key === 'Enter') doRdLogin(); });
