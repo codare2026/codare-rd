@@ -749,7 +749,7 @@ async function doRdLogin() {
     // 背景載入動態 RD 帳號 + 完整資料
     setTimeout(async () => {
       try {
-        const rdRes = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%25&select=key,value`, { headers: SB_HDRS });
+        const rdRes = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%&select=key,value`, { headers: SB_HDRS });
         if (rdRes.ok) {
           const rows = await rdRes.json();
           rows.forEach(({ key, value }) => {
