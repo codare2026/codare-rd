@@ -3077,7 +3077,10 @@ function renderMenuMgr() {
   const buildEditorForPeriod = (p) => {
     const days = DAYS.map((name, di) => `
       <div class="menu-day-editor">
-        <div class="menu-day-header">週${name}</div>
+        <div class="menu-day-header" style="display:flex;align-items:center;justify-content:space-between">
+          <span>週${name}</span>
+          ${di > 0 ? `<button onclick="copyPrevDay('${p}',${di})" style="font-size:10px;padding:2px 8px;border:1px solid var(--teal);color:var(--teal);background:#fff;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">↩ 同前一天</button>` : ''}
+        </div>
         <div class="menu-day-body">
           <div>
             <div class="menu-meal-label">早餐</div>
@@ -3159,6 +3162,28 @@ function renderMenuMgr() {
   ${editorsHTML}
 
   <button class="btn btn-outline" style="margin-top:4px" onclick="addMenuPeriod('${s.id}')">＋ 新增期別菜單（續約用）</button>`;
+}
+
+function copyPrevDay(p, di) {
+  const meals = [
+    { from: `m-${p}-${di-1}-b`, to: `m-${p}-${di}-b` },
+    { from: `m-${p}-${di-1}-l`, to: `m-${p}-${di}-l` },
+    { from: `m-${p}-${di-1}-d`, to: `m-${p}-${di}-d` },
+    { from: `m-${p}-${di-1}-s`, to: `m-${p}-${di}-s` },
+  ];
+  meals.forEach(({ from, to }) => {
+    const src = document.getElementById(from);
+    const dst = document.getElementById(to);
+    if (src && dst) dst.value = src.value;
+  });
+  // 複製份數分配下拉選單
+  const cats = ['c','p','v','f','d','o'];
+  cats.forEach(cat => {
+    const src = document.getElementById(`m-${p}-${di-1}-cpv-${cat}`);
+    const dst = document.getElementById(`m-${p}-${di}-cpv-${cat}`);
+    if (src && dst) dst.value = src.value;
+  });
+  showToast(`✅ 已複製週${['一','二','三','四','五','六','日'][di-1]}的內容`);
 }
 
 function switchMenuStudent(id) { menuStudentId = id; document.getElementById('main-content').innerHTML = renderMenuMgr(); }
