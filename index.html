@@ -13,30 +13,35 @@ const SB_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Conten
 
 const _cache = {};
 
+// ── 讀取（先 cache → localStorage 作為離線備援） ──
 function gs(key) {
   if (_cache[key] !== undefined) return _cache[key];
   try { const v = localStorage.getItem('cd_' + key); return v ? JSON.parse(v) : null; } catch { return null; }
 }
 
+// ── 寫入（cache + localStorage + Supabase 同步） ──
 function ss(key, val) {
   _cache[key] = val;
   try { if (val === null) localStorage.removeItem('cd_' + key); else localStorage.setItem('cd_' + key, JSON.stringify(val)); } catch {}
   sbWrite(key, val);
 }
 
+// ── Supabase 寫入（使用 upsert 確保跨裝置同步） ──
 async function sbWrite(key, val) {
   try {
     if (val === null) {
       await fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}`, { method: 'DELETE', headers: SB_HDRS });
     } else {
       await fetch(`${SB_URL}/rest/v1/cd`, {
-        method: 'POST', headers: SB_HDRS,
+        method: 'POST',
+        headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify({ key, value: val })
       });
     }
   } catch(e) { console.warn('Supabase write error:', e.message); }
 }
 
+// ── 從 localStorage 預載 cache（瞬間啟動） ──
 function preloadLocalCache() {
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -51,10 +56,10 @@ function preloadLocalCache() {
   } catch(e) {}
 }
 
+// ── warmCache：從 Supabase 拉所有資料覆蓋 cache（跨裝置同步核心） ──
 async function warmCache() {
   preloadLocalCache();
   try {
-    // Fetch all keys in batches — skip large ency fileData by limiting response
     const res = await Promise.race([
       fetch(`${SB_URL}/rest/v1/cd?select=key,value&limit=2000`, { headers: SB_HDRS }),
       new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000))
@@ -74,20 +79,28 @@ function bgSync() {
     try { await warmCache(); updateBadge(); } catch(e) {}
   }, 200);
 }
+
+// ── 儲存/載入動態學員資料（直接用 Supabase cd table） ──
 async function saveDynUser(phone, data) {
   _cache['dynuser_' + phone] = data;
   try { localStorage.setItem('cd_dynuser_' + phone, JSON.stringify(data)); } catch {}
-  if (_db) {
-    try { await _db.ref('cd/dynuser_' + phone).set(data); } catch(e) { console.warn(e); }
-  }
+  await sbWrite('dynuser_' + phone, data);
 }
+
 async function loadDynUser(phone) {
-  if (_db) {
-    try {
-      const snap = await _db.ref('cd/dynuser_' + phone).once('value');
-      if (snap.exists()) return snap.val();
-    } catch(e) {}
-  }
+  // 優先從 Supabase 讀取最新資料（跨裝置同步）
+  try {
+    const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.dynuser_${encodeURIComponent(phone)}&select=value`, { headers: SB_HDRS });
+    if (res.ok) {
+      const rows = await res.json();
+      if (rows[0]?.value) {
+        _cache['dynuser_' + phone] = rows[0].value;
+        try { localStorage.setItem('cd_dynuser_' + phone, JSON.stringify(rows[0].value)); } catch {}
+        return rows[0].value;
+      }
+    }
+  } catch(e) {}
+  // 備援：localStorage
   try { return JSON.parse(localStorage.getItem('cd_dynuser_' + phone)); } catch {}
   return null;
 }
@@ -726,27 +739,30 @@ async function doRdLogin() {
 
   if (u && u.password === pw) {
     currentRD = { ...u, id };
-    // Load dynamic RD users
+
+    document.getElementById('rd-err').style.display = 'none';
+    if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
+    else localStorage.removeItem('cd_rd_autologin');
+
+    // 先從 Supabase 拉取所有資料（跨裝置同步），再啟動 App
+    document.getElementById('rd-loading-screen').style.display = 'flex';
     try {
-      const res = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%25&select=key,value`, { headers: SB_HDRS });
-      if (res.ok) {
-        const rows = await res.json();
+      // 載入所有動態 RD 帳號
+      const rdRes = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%25&select=key,value`, { headers: SB_HDRS });
+      if (rdRes.ok) {
+        const rows = await rdRes.json();
         rows.forEach(({ key, value }) => {
           const rid = key.replace('rduser_', '');
           DYNAMIC_RD_USERS[rid] = value;
           _cache[key] = value;
         });
       }
-    } catch(e) {}
+      // warmCache：從 Supabase 同步所有 key-value 資料
+      await warmCache();
+    } catch(e) { preloadLocalCache(); }
 
-    document.getElementById('rd-err').style.display = 'none';
-    if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
-    else localStorage.removeItem('cd_rd_autologin');
-    preloadLocalCache();
     document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('rd-loading-screen').style.display = 'none';
     launchRdApp();
-    bgSync();
   } else {
     document.getElementById('rd-err').style.display = 'block';
   }
@@ -798,11 +814,11 @@ function doRdLogout() {
         }
         if (u && u.password === saved.pw) {
           currentRD = { ...u, id: saved.id };
-          preloadLocalCache();
+          // 從 Supabase 同步最新資料（跨裝置）
+          try { await warmCache(); } catch(e) { preloadLocalCache(); }
           document.getElementById('rd-loading-screen').style.display = 'none';
           document.getElementById('login-screen').style.display = 'none';
           launchRdApp();
-          bgSync();
           return;
         }
       }
@@ -1818,33 +1834,14 @@ function renderIntakeCard(id) {
     `<button class="intake-tab ${intakeTab===t.key?'active':''}" onclick="switchIntakeTab('${id}','${t.key}')">${t.label}</button>`
   ).join('');
 
-  // Google Form import panel (always visible at top)
+  // Google 表單後台按鈕
   const gFormHTML = `
-  <div style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1.5px solid #3b82f6;border-radius:12px;padding:14px 16px;margin-bottom:16px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <div style="font-size:20px">📋</div>
-      <div style="flex:1">
-        <div style="font-weight:700;color:#1e40af;font-size:14px">Google 表單一鍵匯入</div>
-        <div style="font-size:12px;color:#3b82f6;margin-top:2px">輸入 Google 試算表 CSV 網址，自動填入建檔資料</div>
-      </div>
-    </div>
-    <div style="margin-top:10px;display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
-      <div style="flex:1">
-        <input type="text" id="gform-csv-url-${id}" placeholder="貼上 Google 試算表 CSV 匯出網址（見下方說明）…"
-          style="width:100%;border:1.5px solid #93c5fd;border-radius:8px;padding:8px 12px;font-size:12px;font-family:inherit;outline:none;box-sizing:border-box"
-          value="${gs('gform_url_' + id) || ''}">
-        <div style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5">
-          📌 取得方式：試算表 → 檔案 → 下載 → CSV格式 → 右鍵複製連結，或開啟試算表後在網址列把 <code>/edit</code> 改成 <code>/export?format=csv&gid=0</code>
-        </div>
-      </div>
-      <button class="btn btn-outline btn-sm" style="border-color:#3b82f6;color:#3b82f6;flex-shrink:0;white-space:nowrap" onclick="importFromGForm('${id}')">📥 匯入</button>
-    </div>
-    <div style="margin-top:8px">
-      <a href="https://docs.google.com/forms/d/e/1FAIpQLSd_osN3jrU6ChHMAeGi6/viewform" target="_blank" 
-        style="font-size:11px;color:#3b82f6;text-decoration:none">🔗 開啟 Google 表單 (新分頁)</a>
-      &nbsp;｜&nbsp;
-      <span style="font-size:11px;color:#6b7280">填完表單後，到試算表取得 CSV 匯出連結再匯入</span>
-    </div>
+  <div style="margin-bottom:16px">
+    <a href="https://drive.google.com/drive/u/0/folders/1zsi_BZwiXeZTbNKL6jmb4bj8may_dWrw" target="_blank"
+      style="display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:linear-gradient(135deg,#1a73e8,#1557b0);color:#fff;border-radius:10px;font-size:14px;font-weight:700;text-decoration:none;font-family:inherit;box-shadow:0 2px 8px rgba(26,115,232,0.3);transition:opacity 0.2s"
+      onmouseover="this.style.opacity='0.88'" onmouseout="this.style.opacity='1'">
+      <span style="font-size:18px">📊</span> Google 表單後台
+    </a>
   </div>`;
 
   let bodyHTML = '';
@@ -1853,7 +1850,7 @@ function renderIntakeCard(id) {
     bodyHTML = `
     <div class="intake-section-title">基本資料</div>
     <div class="intake-row"><span class="intake-label">姓名</span><span class="intake-val">${v(intake.name || s.name)}</span></div>
-    <div class="intake-row"><span class="intake-label">Email（Notion 帳號）</span><span class="intake-val">${v(intake.email)}</span></div>
+    <div class="intake-row"><span class="intake-label">電話</span><span class="intake-val">${v(intake.phone || s.phone)}</span></div>
     <div class="intake-row"><span class="intake-label">性別</span><span class="intake-val">${v(intake.gender)}</span></div>
     <div class="intake-row"><span class="intake-label">年紀</span><span class="intake-val">${intake.age ? intake.age + ' 歲' : '<span class="empty">——</span>'}</span></div>
     <div class="intake-row"><span class="intake-label">身高</span><span class="intake-val">${intake.height ? intake.height + ' cm' : '<span class="empty">——</span>'}</span></div>
@@ -1951,7 +1948,7 @@ function renderIntakeCard(id) {
     </div>
   </div>
 
-  ${!hasIntake ? `<div class="notice amber">⚠️ 學員尚未建檔，請參考 Google 表單填寫結果，點下方各分頁的「編輯」按鈕建入資料。<a href="${INTAKE_FORM_URL}" target="_blank" style="margin-left:8px;color:var(--teal);font-weight:700">開啟建檔表單 →</a></div>` : ''}
+  ${!hasIntake ? '<div class="notice amber">⚠️ 學員尚未建檔，請點下方各分頁的「編輯」按鈕逐一填入資料。</div>' : ''}
 
   ${gFormHTML}
 
@@ -1997,33 +1994,32 @@ async function importFromGForm(studentId) {
     };
 
     const imported = {
-      name:          get('姓名', '名字', 'name'),
-      email:         get('email', '信箱', 'mail'),
-      gender:        get('性別', 'gender', '男女'),
-      age:           get('年齡', '年紀', 'age'),
-      height:        get('身高', 'height'),
-      weight:        get('體重', 'weight', '現在體重'),
-      bodyFat:       get('體脂', 'body fat', 'fat'),
-      activityLevel: get('活動量', '活動', '工作型態', 'activity'),
-      disease:       get('疾病', '慢性', '病史', 'disease'),
-      medication:    get('藥物', '保健', 'medication', '藥'),
+      name:          get('姓名', '名字', 'name', '您的姓名', '請問您的姓名'),
+      phone:         get('電話', '手機', 'phone', '聯絡電話', '手機號碼', '您的手機'),
+      gender:        get('性別', 'gender', '您的性別', '生理性別'),
+      age:           get('年齡', '年紀', 'age', '請問您幾歲', '您的年齡'),
+      height:        get('身高', 'height', '您的身高', '請問您的身高'),
+      weight:        get('體重', 'weight', '現在體重', '目前體重', '您的體重'),
+      bodyFat:       get('體脂', 'body fat', 'fat', '體脂率', '您的體脂'),
+      activityLevel: get('活動量', '活動', '工作型態', 'activity', '日常活動', '生活型態'),
+      disease:       get('疾病', '慢性', '病史', 'disease', '健康狀況', '慢性疾病', '既往病史'),
+      medication:    get('藥物', '保健', 'medication', '藥', '服用', '補充品'),
       // Goals
-      goal:          get('目標', '課程目標', 'goal'),
-      targetWeight:  get('目標體重', 'target weight'),
-      targetFat:     get('目標體脂', 'target fat'),
+      goal:          get('目標', '課程目標', 'goal', '希望達成', '您的目標', '想要'),
+      targetWeight:  get('目標體重', 'target weight', '希望體重', '理想體重'),
+      targetFat:     get('目標體脂', 'target fat', '希望體脂'),
       // Diet
-      mealTimes:     get('用餐時間', '幾餐', '餐次', 'meal'),
-      foodAllergy:   get('過敏', '不能吃', 'allergy'),
-      foodDislike:   get('不喜歡', '不吃', '食物偏好', 'dislike'),
-      eatOut:        get('外食', '自煮', 'eat out'),
+      mealTimes:     get('用餐時間', '幾餐', '餐次', 'meal', '一天幾餐', '飲食頻率'),
+      foodAllergy:   get('過敏', '不能吃', 'allergy', '食物過敏', '禁忌食物'),
+      foodDislike:   get('不喜歡', '不吃', '食物偏好', 'dislike', '討厭', '不愛吃'),
+      eatOut:        get('外食', '自煮', 'eat out', '外食頻率', '自己煮'),
       // Lifestyle
-      sleepTime:     get('睡覺', '睡眠時間', '幾點睡'),
-      wakeTime:      get('起床', '幾點起', 'wake'),
-      exerciseHabit: get('運動習慣', '運動', 'exercise'),
-      waterIntake:   get('飲水', '喝水', 'water'),
-      stressLevel:   get('壓力', 'stress'),
-      // Additional notes
-      notes:         get('備註', '其他', 'note', '補充'),
+      sleepTime:     get('睡覺', '睡眠時間', '幾點睡', '就寢', '入睡'),
+      wakeTime:      get('起床', '幾點起', 'wake', '起床時間'),
+      exerciseHabit: get('運動習慣', '運動', 'exercise', '運動頻率', '你有在運動'),
+      waterIntake:   get('飲水', '喝水', 'water', '每日飲水', '水分攝取'),
+      stressLevel:   get('壓力', 'stress', '生活壓力', '工作壓力'),
+      notes:         get('備註', '其他', 'note', '補充', '想說', '其他補充'),
     };
 
     // Merge with existing intake
@@ -2032,6 +2028,8 @@ async function importFromGForm(studentId) {
     Object.entries(imported).forEach(([k, v]) => {
       if (v) merged[k] = v;
     });
+    // Also map phone to intake.phone
+    if (imported.phone) merged.phone = imported.phone;
     ss(`intake_${studentId}`, merged);
 
     // Also update student goal if imported
@@ -2096,13 +2094,14 @@ function switchIntakeTab(id, tab) {
 
 function openEditIntake(id, section) {
   const intake = gs(`intake_${id}`) || {};
+  const s = STUDENTS_DB[id] || gs(`dynuser_${id}`) || {};
   let fields = '';
 
   if (section === 'basic') {
     fields = `
       <div class="fld-row">
-        <div class="fld"><label>姓名</label><input id="ie-name" value="${intake.name||''}" placeholder="統一姓名"></div>
-        <div class="fld"><label>Email（Notion 帳號）</label><input id="ie-email" type="email" value="${intake.email||''}" placeholder="example@gmail.com"></div>
+        <div class="fld"><label>姓名</label><input id="ie-name" value="${intake.name||s.name||''}" placeholder="統一姓名"></div>
+        <div class="fld"><label>電話</label><input id="ie-email" type="tel" value="${intake.phone||s.phone||''}" placeholder="0912345678"></div>
       </div>
       <div class="fld-row3">
         <div class="fld"><label>性別</label>
@@ -2237,7 +2236,7 @@ function openAddStudentModal() {
   ]);
 }
 
-const INTAKE_FORM_URL = 'https://forms.gle/YBqHgPtz87x3mkp89';
+const INTAKE_FORM_URL = 'https://forms.gle/D9EwNN93MZgT4xcr9';
 
 async function submitAddStudent() {
   const name = document.getElementById('new-name')?.value?.trim();
@@ -2249,24 +2248,25 @@ async function submitAddStudent() {
   const goal = document.getElementById('new-goal')?.value?.trim();
   if (!name || !phone || !pw) { showToast('請填寫姓名、手機號碼和密碼'); return; }
 
-  // Show loading while checking Firebase
+  // Show loading while checking Supabase
   showLoading('確認學員資料…');
-  // Check Firebase directly (not cache) to avoid false positives after deletion
-  let existingInFirebase = null;
-  if (_db) {
-    try {
-      const snap = await _db.ref('cd/dynuser_' + phone).once('value');
-      if (snap.exists()) existingInFirebase = snap.val();
-    } catch(e) {}
-  }
-  if (!existingInFirebase) {
-    // Also check local cache as fallback
+  // 直接查 Supabase（跨裝置同步），避免誤判
+  let existingStudent = null;
+  try {
+    const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.dynuser_${encodeURIComponent(phone)}&select=value`, { headers: SB_HDRS });
+    if (res.ok) {
+      const rows = await res.json();
+      if (rows[0]?.value?.name) existingStudent = rows[0].value;
+    }
+  } catch(e) {}
+  if (!existingStudent) {
+    // 備援：local cache
     const localCheck = STUDENTS_DB[phone] || gs(`dynuser_${phone}`);
-    if (localCheck && localCheck.name) existingInFirebase = localCheck;
+    if (localCheck && localCheck.name) existingStudent = localCheck;
   }
-  if (existingInFirebase && existingInFirebase.name) {
+  if (existingStudent && existingStudent.name) {
     hideLoading();
-    showToast(`⚠️ 手機號碼 ${phone} 已存在（${existingInFirebase.name}），請使用不同號碼`);
+    showToast(`⚠️ 手機號碼 ${phone} 已存在（${existingStudent.name}），請使用不同號碼`);
     return;
   }
 
@@ -3638,11 +3638,26 @@ async function generateAIReport(studentId) {
       <div style="font-size:13px;color:var(--g4)">自動讀取飲食紀錄、體態數值、生活習慣…</div>
     </div>`;
 
-  // Small delay to show loading animation
   await new Promise(r => setTimeout(r, 600));
 
-  const s = getActiveStudents().find(x => x.id === studentId);
-  if (!s) { btn.textContent = '📊 生成結案報告'; btn.disabled = false; return; }
+  // Get student info — try STUDENTS_DB first, then gs() fallback
+  let s = getActiveStudents().find(x => x.id === studentId);
+  if (!s) {
+    const dyn = gs(`dynuser_${studentId}`);
+    if (dyn) s = { ...dyn, id: studentId };
+  }
+  if (!s) {
+    // Try fetching directly from Supabase
+    try {
+      const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.dynuser_${studentId}&select=value`, { headers: SB_HDRS });
+      if (res.ok) { const rows = await res.json(); if (rows[0]?.value) s = { ...rows[0].value, id: studentId }; }
+    } catch(e) {}
+  }
+  if (!s) {
+    out.innerHTML = `<div class="card"><div class="notice amber">⚠️ 找不到學員資料，請先點「🔄 同步」再試</div></div>`;
+    btn.textContent = '📊 生成結案報告'; btn.disabled = false;
+    return;
+  }
 
   const sDates = buildStudentDates(s.start, s.end);
   const totalDays = sDates.length;
