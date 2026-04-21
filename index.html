@@ -709,12 +709,13 @@ function closeLightbox() {
   document.getElementById('lightbox').classList.add('hidden');
 }
 function getMyStudents() {
-  // Merge hardcoded students with dynamically created ones from Firebase cache / localStorage
   const storedList = gs(`rd_students_${currentRD.id}`) || [];
-  const allIds = [...new Set([...currentRD.students, ...storedList])];
+  // Guard: ensure both are arrays even if stored data is corrupted
+  const rdStudents = Array.isArray(currentRD.students) ? currentRD.students : [];
+  const stored = Array.isArray(storedList) ? storedList : [];
+  const allIds = [...new Set([...rdStudents, ...stored])];
   allIds.forEach(id => {
     if (!STUDENTS_DB[id]) {
-      // Try Firebase cache first (warmed on login), then localStorage
       const dyn = gs(`dynuser_${id}`);
       if (dyn) STUDENTS_DB[id] = dyn;
     }
