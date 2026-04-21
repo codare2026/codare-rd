@@ -2293,10 +2293,9 @@ async function submitAddStudent() {
   if (!rdStudentList.includes(phone)) rdStudentList.push(phone);
   if (window._cache) _cache[`rd_students_${currentRD.id}`] = rdStudentList;
 
-  // 4. Persist to Firebase + localStorage (async, non-blocking)
+  // 4. Persist to Supabase (ss handles cache + localStorage + Supabase write)
   ss(`dynuser_${phone}`, studentData);
   ss(`rd_students_${currentRD.id}`, rdStudentList);
-  saveDynUser(phone, studentData);
 
   hideLoading();
   closeModal();
@@ -2328,9 +2327,9 @@ function saveStudentInfo(studentId) {
   dyn.end   = end;
   dyn.goal  = goal;
   if (window._cache) _cache[`dynuser_${studentId}`] = dyn;
-  saveDynUser(studentId, dyn);   // Firebase write — student picks this up on next login
+  ss(`dynuser_${studentId}`, dyn);  // Supabase 同步，學員下次同步即看到
 
-  showToast('✅ 課程資訊已更新！學員重新登入後日期即同步');
+  showToast('✅ 課程資訊已更新！學員重新同步後日期即更新');
 
   // Refresh the intake card to reflect new dates
   document.getElementById('main-content').innerHTML = renderIntakeCard(studentId);
@@ -2368,10 +2367,10 @@ function submitChangePw(studentId) {
 
   // Update in memory DB
   if (STUDENTS_DB[studentId]) STUDENTS_DB[studentId].password = np;
-  // Update in Firebase + localStorage
+  // Update in Supabase（跨裝置同步）
   const dyn = gs(`dynuser_${studentId}`) || {};
   dyn.password = np;
-  saveDynUser(studentId, dyn);
+  ss(`dynuser_${studentId}`, dyn);
 
   closeModal();
   showToast(`✅ 密碼已更新為：${np}　請告知學員 ${STUDENTS_DB[studentId]?.name || ''}！`);
