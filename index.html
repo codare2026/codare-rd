@@ -62,7 +62,7 @@ async function warmCache() {
   try {
     const res = await Promise.race([
       fetch(`${SB_URL}/rest/v1/cd?select=key,value&limit=2000`, { headers: SB_HDRS }),
-      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000))
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 4000))
     ]);
     if (res && res.ok) {
       const rows = await res.json();
@@ -156,8 +156,9 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--g0); color: va
 .rd-spinner {
   width: 48px; height: 48px; border: 4px solid rgba(255,255,255,0.15);
   border-top-color: var(--teal); border-radius: 50%;
-  animation: rdspin 0.8s linear infinite;
+  animation: rdspin 0.7s linear infinite;
 }
+@keyframes rdspin { to { transform: rotate(360deg); } }
 .inline-loading {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 60px 20px; gap: 16px; color: rgba(255,255,255,0.5); font-size: 14px;
@@ -744,25 +745,33 @@ async function doRdLogin() {
     if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
     else localStorage.removeItem('cd_rd_autologin');
 
-    // 先從 Supabase 拉取所有資料（跨裝置同步），再啟動 App
-    document.getElementById('rd-loading-screen').style.display = 'flex';
-    try {
-      // 載入所有動態 RD 帳號
-      const rdRes = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%25&select=key,value`, { headers: SB_HDRS });
-      if (rdRes.ok) {
-        const rows = await rdRes.json();
-        rows.forEach(({ key, value }) => {
-          const rid = key.replace('rduser_', '');
-          DYNAMIC_RD_USERS[rid] = value;
-          _cache[key] = value;
-        });
-      }
-      // warmCache：從 Supabase 同步所有 key-value 資料
-      await warmCache();
-    } catch(e) { preloadLocalCache(); }
-
+    // 立即啟動 App，背景同步 Supabase 資料（不讓使用者等待）
+    preloadLocalCache();
     document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('rd-loading-screen').style.display = 'none';
     launchRdApp();
+    // 背景載入動態 RD 帳號 + 完整資料
+    setTimeout(async () => {
+      try {
+        const rdRes = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%25&select=key,value`, { headers: SB_HDRS });
+        if (rdRes.ok) {
+          const rows = await rdRes.json();
+          rows.forEach(({ key, value }) => {
+            const rid = key.replace('rduser_', '');
+            DYNAMIC_RD_USERS[rid] = value;
+            _cache[key] = value;
+          });
+        }
+        await warmCache();
+        updateBadge();
+        // 靜默更新當前頁面
+        const el = document.getElementById('main-content');
+        if (el && currentSection) {
+          const renders = { dashboard: renderDashboard, feedback: renderFeedback, students: renderStudentsPage };
+          if (renders[currentSection]) el.innerHTML = renders[currentSection]();
+        }
+      } catch(e) { console.warn('bg sync failed:', e.message); }
+    }, 300);
   } else {
     document.getElementById('rd-err').style.display = 'block';
   }
@@ -814,11 +823,12 @@ function doRdLogout() {
         }
         if (u && u.password === saved.pw) {
           currentRD = { ...u, id: saved.id };
-          // 從 Supabase 同步最新資料（跨裝置）
-          try { await warmCache(); } catch(e) { preloadLocalCache(); }
+          preloadLocalCache(); // 瞬間啟動
           document.getElementById('rd-loading-screen').style.display = 'none';
           document.getElementById('login-screen').style.display = 'none';
           launchRdApp();
+          // 背景同步
+          setTimeout(async () => { try { await warmCache(); updateBadge(); } catch(e) {} }, 300);
           return;
         }
       }
