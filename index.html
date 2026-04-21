@@ -56,22 +56,90 @@ function preloadLocalCache() {
   } catch(e) {}
 }
 
-// ── warmCache：從 Supabase 拉所有資料覆蓋 cache（跨裝置同步核心） ──
+// ── warmCache：分批精確查詢，快速同步所有資料 ──
 async function warmCache() {
   preloadLocalCache();
-  try {
-    const res = await Promise.race([
-      fetch(`${SB_URL}/rest/v1/cd?select=key,value&limit=2000`, { headers: SB_HDRS }),
-      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 4000))
-    ]);
-    if (res && res.ok) {
-      const rows = await res.json();
-      rows.forEach(({ key, value }) => {
-        _cache[key] = value;
-        try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-      });
+
+  const safeGet = async (url) => {
+    try {
+      const res = await Promise.race([
+        fetch(url, { headers: SB_HDRS }),
+        new Promise((_, r) => setTimeout(() => r(new Error('t')), 5000))
+      ]);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch(e) { return []; }
+  };
+
+  // 取得所有學員 id（從 cache 或 localStorage）
+  const getStudentIds = () => {
+    const ids = new Set();
+    // 從 rd_students_ 抓
+    Object.keys(_cache).forEach(k => {
+      if (k.startsWith('rd_students_')) {
+        const list = _cache[k];
+        if (Array.isArray(list)) list.forEach(id => ids.add(id));
+      }
+    });
+    // 也從 localStorage 抓
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('cd_rd_students_')) {
+          try {
+            const list = JSON.parse(localStorage.getItem(key));
+            if (Array.isArray(list)) list.forEach(id => ids.add(id));
+          } catch(e) {}
+        }
+      }
+    } catch(e) {}
+    return [...ids];
+  };
+
+  // 批次 1：RD 帳號 + 學員清單（固定 key，用 like）
+  const rdRows = await safeGet(
+    `${SB_URL}/rest/v1/cd?or=(key.like.rduser_%,key.like.rd_students_%,key.like.rd_status_%,key.like.rd_order_%)&select=key,value&limit=200`
+  );
+  rdRows.forEach(({ key, value }) => {
+    _cache[key] = value;
+    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+    // 載入動態 RD 帳號
+    if (key.startsWith('rduser_')) {
+      const rid = key.replace('rduser_', '');
+      if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
     }
-  } catch(e) { console.warn('warmCache failed, using localStorage:', e.message); }
+  });
+
+  // 批次 2：依學員 id 精確查 ency_ 和 menus_（這是顯示問題的根源）
+  const studentIds = getStudentIds();
+  if (studentIds.length > 0) {
+    const exactKeys = studentIds.flatMap(id => [
+      `ency_${id}`, `menus_${id}`, `intake_${id}`, `progress_${id}`,
+      `inbox_${id}`, `dynuser_${id}`, `body_notif_${id}`, `btNote_${id}`
+    ]);
+    const inFilter = exactKeys.map(k => `"${k}"`).join(',');
+    const exactRows = await safeGet(
+      `${SB_URL}/rest/v1/cd?key=in.(${inFilter})&select=key,value`
+    );
+    exactRows.forEach(({ key, value }) => {
+      _cache[key] = value;
+      try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+    });
+
+    // 批次 3：有日期後綴的 key（food_/wplan_/goals_）— 用 like，分批避免 timeout
+    const likeFilter = studentIds.flatMap(id => [
+      `key.like.food_${id}%`,
+      `key.like.wplan_${id}%`,
+      `key.like.goals_${id}%`,
+    ]).join(',');
+    const likeRows = await safeGet(
+      `${SB_URL}/rest/v1/cd?or=(${likeFilter})&select=key,value&limit=1000`
+    );
+    likeRows.forEach(({ key, value }) => {
+      _cache[key] = value;
+      try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+    });
+  }
 }
 
 function bgSync() {
