@@ -45,19 +45,61 @@ function ss(key, val) {
       .catch(e => console.warn('Firebase write error:', e));
   }
 }
+function preloadLocalCache() {
+  // Instantly load all cached data from localStorage into memory
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('cd_')) {
+        const k = key.slice(3);
+        if (_cache[k] === undefined) {
+          try { _cache[k] = JSON.parse(localStorage.getItem(key)); } catch {}
+        }
+      }
+    }
+  } catch(e) {}
+}
+
 async function warmCache() {
+  preloadLocalCache(); // instant
   if (!_db) return;
   try {
-    const snap = await _db.ref('cd').once('value');
-    if (snap.exists()) {
+    const snap = await Promise.race([
+      _db.ref('cd').once('value'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
+    ]);
+    if (snap && snap.exists()) {
       snap.forEach(child => {
         const k = child.key.replace(/_sl_/g, '/');
-        _cache[k] = child.val();
-        try { localStorage.setItem('cd_' + k, JSON.stringify(child.val())); } catch {}
+        const val = child.val();
+        _cache[k] = val;
+        try { localStorage.setItem('cd_' + k, JSON.stringify(val)); } catch {}
       });
     }
-    console.log('✅ 資料同步完成');
-  } catch(e) { console.warn('Cache warm failed, using localStorage:', e); }
+  } catch(e) {
+    console.warn('Firebase sync failed, using localStorage cache:', e.message);
+  }
+}
+
+function bgSync() {
+  if (!_db) return;
+  setTimeout(async () => {
+    try {
+      const snap = await _db.ref('cd').once('value');
+      if (!snap.exists()) return;
+      let changed = false;
+      snap.forEach(child => {
+        const k = child.key.replace(/_sl_/g, '/');
+        const newVal = child.val();
+        if (JSON.stringify(newVal) !== JSON.stringify(_cache[k])) {
+          _cache[k] = newVal;
+          try { localStorage.setItem('cd_' + k, JSON.stringify(newVal)); } catch {}
+          changed = true;
+        }
+      });
+      if (changed) updateBadge();
+    } catch(e) {}
+  }, 100);
 }
 async function saveDynUser(phone, data) {
   _cache['dynuser_' + phone] = data;
@@ -748,11 +790,13 @@ async function doRdLogin() {
     document.getElementById('rd-err').style.display = 'none';
     if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
     else localStorage.removeItem('cd_rd_autologin');
-    // Show loading screen while warming cache
+    // Preload localStorage instantly, then launch UI
+    preloadLocalCache();
     document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('rd-loading-screen').style.display = 'flex';
-    await warmCache();
+    document.getElementById('rd-loading-screen').style.display = 'none';
     launchRdApp();
+    // Sync Firebase in background after UI is shown
+    bgSync();
   } else {
     document.getElementById('rd-err').style.display = 'block';
   }
@@ -806,8 +850,11 @@ function doRdLogout() {
         }
         if (u && u.password === saved.pw) {
           currentRD = { ...u, id: saved.id };
-          await warmCache();
+          preloadLocalCache();
+          document.getElementById('rd-loading-screen').style.display = 'none';
+          document.getElementById('login-screen').style.display = 'none';
           launchRdApp();
+          bgSync();
           return;
         }
       }
@@ -951,7 +998,7 @@ function toggleSidebar() {
 async function syncRdData() {
   showLoading('同步資料中…');
   try {
-    await warmCache();
+    await warmCache(); // Full sync when user explicitly requests
     hideLoading();
     showToast('✅ 資料已同步！');
     document.getElementById('main-content').innerHTML = (
