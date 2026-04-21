@@ -2832,17 +2832,35 @@ function renderWeekplan() {
 
   <div class="card">
     <div class="card-title">🍽️ 餐次份數分配（C 全穀｜P 豆魚蛋肉｜V 蔬菜｜F 水果｜D 乳品｜O 油脂）</div>
-    <div class="fld-row">
-      <div class="fld"><label>早餐</label><input type="text" id="wp-b" value="${plan.breakfast || ''}" placeholder="C 1.5｜P 2｜V 1｜F 0｜D 0.5｜O 1"></div>
-      <div class="fld"><label>午餐</label><input type="text" id="wp-l" value="${plan.lunch || ''}" placeholder="C 2｜P 3｜V 2｜F 0｜D 0｜O 1.5"></div>
-    </div>
-    <div class="fld-row">
-      <div class="fld"><label>晚餐</label><input type="text" id="wp-d" value="${plan.dinner || ''}" placeholder="C 1.5｜P 2｜V 2｜F 1｜D 0｜O 1"></div>
-      <div class="fld"><label>點心</label><input type="text" id="wp-s" value="${plan.snack || ''}" placeholder="C 0｜P 0｜V 0｜F 1｜D 1｜O 0"></div>
-    </div>
-    <div class="fld">
-      <label>整天份數合計（可手動填入或留空讓系統自動計算）</label>
-      <input type="text" id="wp-total" value="${plan.total || ''}" placeholder="自動計算，或手動填：C 5｜P 7｜V 5｜F 2｜D 1.5｜O 3.5">
+    <div style="font-size:11px;color:var(--g4);margin-bottom:12px">每格選擇份數，系統自動計算整天合計</div>
+    ${['早餐','午餐','晚餐','點心'].map((meal, mi) => {
+      const mealKey = ['b','l','d','s'][mi];
+      const mealId = `wp-${mealKey}`;
+      const saved = plan[['breakfast','lunch','dinner','snack'][mi]] || '';
+      // Parse saved string like "C 1.5｜P 2｜V 1｜F 0｜D 0.5｜O 1"
+      const parseVal = (str, letter) => {
+        const m = str.match(new RegExp(letter + '\\s*([\\d.]+)'));
+        return m ? m[1] : '0';
+      };
+      const cats = ['C','P','V','F','D','O'];
+      const opts = [0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8];
+      const selects = cats.map(cat => {
+        const val = parseVal(saved, cat);
+        const options = opts.map(o => `<option value="${o}" ${parseFloat(val)===o?'selected':''}>${o}</option>`).join('');
+        return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1">
+          <div style="font-size:10px;font-weight:700;color:var(--teal)">${cat}</div>
+          <select id="${mealId}-${cat.toLowerCase()}" onchange="autoCalcTotal()" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:5px 2px;font-size:13px;font-family:inherit;outline:none;text-align:center;background:#fff">${options}</select>
+        </div>`;
+      }).join('');
+      return `<div style="margin-bottom:12px">
+        <div style="font-size:12px;font-weight:700;color:var(--g6);margin-bottom:6px">${meal}</div>
+        <div style="display:flex;gap:6px">${selects}</div>
+      </div>`;
+    }).join('')}
+    <div style="background:var(--teal-light);border-radius:8px;padding:10px 12px;margin-top:4px">
+      <div style="font-size:12px;font-weight:700;color:var(--teal-dark);margin-bottom:4px">整天份數合計（自動計算）</div>
+      <div id="wp-total-display" style="font-size:13px;color:var(--teal-dark);font-weight:600">計算中…</div>
+      <input type="hidden" id="wp-total">
     </div>
   </div>
 
@@ -2938,11 +2956,11 @@ function saveWeekplan(studentId, week) {
     fat: document.getElementById('wp-fat')?.value || '',
     waist: document.getElementById('wp-waist')?.value || '',
     session: document.getElementById('wp-session')?.value || '',
-    breakfast: document.getElementById('wp-b')?.value || '',
-    lunch: document.getElementById('wp-l')?.value || '',
-    dinner: document.getElementById('wp-d')?.value || '',
-    snack: document.getElementById('wp-s')?.value || '',
-    total: document.getElementById('wp-total')?.value || '',
+    breakfast: buildMealStr('b'),
+    lunch:     buildMealStr('l'),
+    dinner:    buildMealStr('d'),
+    snack:     buildMealStr('s'),
+    total:     buildTotalStr(),
     exercise: document.getElementById('wp-ex')?.value || '',
     note: document.getElementById('wp-note')?.value || ''
   };
@@ -3022,8 +3040,24 @@ function renderMenuMgr() {
             <textarea id="m-${p}-${di}-s" rows="2" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;resize:none;outline:none" placeholder="點心…">${getDay(p,di,'snack')}</textarea>
           </div>
           <div style="grid-column:1/-1">
-            <div class="menu-meal-label" style="color:var(--teal-dark)">份數分配（C 全穀｜P 豆蛋魚肉｜V 蔬｜F 果｜D 奶｜O 油）</div>
-            <input type="text" id="m-${p}-${di}-cpv" value="${getDay(p,di,'cpvfdo')}" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;outline:none" placeholder="例：C 2｜P 4｜V 3｜F 2｜D 1｜O 2.5">
+            <div class="menu-meal-label" style="color:var(--teal-dark)">份數分配</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap" id="m-${p}-${di}-cpv-wrap">
+              ${(() => {
+                const saved = getDay(p,di,'cpvfdo') || '';
+                const parseVal = (str, letter) => { const m = str.match(new RegExp(letter + '\\s*([\\d.]+)')); return m ? m[1] : '0'; };
+                const cats = [['C','全穀'],['P','豆魚蛋肉'],['V','蔬菜'],['F','水果'],['D','乳品'],['O','油脂']];
+                const opts = [0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8];
+                return cats.map(([cat, label]) => {
+                  const val = parseVal(saved, cat);
+                  const options = opts.map(o => `<option value="${o}" ${parseFloat(val)===o?'selected':''}>${o}</option>`).join('');
+                  return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:44px">
+                    <div style="font-size:9px;font-weight:700;color:var(--teal)">${cat}</div>
+                    <div style="font-size:8px;color:var(--g4);line-height:1">${label}</div>
+                    <select id="m-${p}-${di}-cpv-${cat.toLowerCase()}" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:4px 1px;font-size:12px;font-family:inherit;outline:none;text-align:center;background:#fff">${options}</select>
+                  </div>`;
+                }).join('');
+              })()}
+            </div>
           </div>
         </div>
       </div>`).join('');
@@ -3082,7 +3116,14 @@ function saveMenu(studentId, period) {
     lunch:     document.getElementById(`m-${period}-${di}-l`)?.value || '',
     dinner:    document.getElementById(`m-${period}-${di}-d`)?.value || '',
     snack:     document.getElementById(`m-${period}-${di}-s`)?.value || '',
-    cpvfdo:    document.getElementById(`m-${period}-${di}-cpv`)?.value || ''
+    cpvfdo:    (() => {
+      const cats = ['C','P','V','F','D','O'];
+      const parts = cats.map(cat => {
+        const v = document.getElementById(`m-${period}-${di}-cpv-${cat.toLowerCase()}`)?.value || '0';
+        return `${cat} ${v}`;
+      });
+      return parts.join('｜');
+    })()''
   }));
   allMenus[period] = {
     label: document.getElementById(`mlabel-${period}`)?.value || `第${period}期菜單`,
