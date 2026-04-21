@@ -121,6 +121,16 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--g0); color: va
 .pw-eye { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; font-size: 12px; color: var(--teal); cursor: pointer; font-weight: 700; font-family: inherit; }
 .btn-login { width: 100%; padding: 13px; background: var(--teal); color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; font-family: inherit; cursor: pointer; transition: background 0.2s; }
 .btn-login:hover { background: var(--teal-dark); }
+#rd-loading-screen {
+  position: fixed; inset: 0; background: var(--g9); z-index: 99999;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+}
+.rd-spinner {
+  width: 48px; height: 48px; border: 4px solid rgba(255,255,255,0.15);
+  border-top-color: var(--teal); border-radius: 50%;
+  animation: rdspin 0.8s linear infinite;
+}
+@keyframes rdspin { to { transform: rotate(360deg); } }
 .login-err { color: var(--red); font-size: 13px; margin-top: 10px; text-align: center; display: none; }
 .login-hint-box { margin-top: 20px; padding: 12px 14px; background: var(--g0); border-radius: 8px; font-size: 12px; color: var(--g4); }
 
@@ -357,8 +367,16 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--g0); color: va
 </head>
 <body>
 
+<!-- LOADING -->
+<div id="rd-loading-screen">
+  <div style="font-size:48px">🦁</div>
+  <div class="rd-spinner"></div>
+  <div style="font-size:14px;color:rgba(255,255,255,0.7);font-weight:500">Co-Dare 管理後台</div>
+  <div style="font-size:12px;color:rgba(255,255,255,0.4)">資料載入中，請稍候…</div>
+</div>
+
 <!-- ══ LOGIN ══ -->
-<div id="login-screen">
+<div id="login-screen" style="display:none">
   <div class="login-box">
     <div class="login-logo">🦁</div>
     <div class="login-title">Co-Dare 管理後台</div>
@@ -621,10 +639,10 @@ async function doRdLogin() {
     document.getElementById('rd-err').style.display = 'none';
     if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
     else localStorage.removeItem('cd_rd_autologin');
-    const btn = document.querySelector('.btn-login');
-    if (btn) { btn.textContent = '資料載入中...'; btn.disabled = true; }
+    // Show loading screen while warming cache
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('rd-loading-screen').style.display = 'flex';
     await warmCache();
-    if (btn) { btn.textContent = '登入後台'; btn.disabled = false; }
     launchRdApp();
   } else {
     document.getElementById('rd-err').style.display = 'block';
@@ -632,9 +650,9 @@ async function doRdLogin() {
 }
 
 function launchRdApp() {
+  document.getElementById('rd-loading-screen').style.display = 'none';
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
-  // Show mobile bottom nav only after login
   document.getElementById('bottom-nav').style.display = '';
   document.getElementById('sb-rdname').textContent = currentRD.name;
   document.getElementById('topbar-date').textContent = formatDate(new Date());
@@ -666,20 +684,25 @@ function doRdLogout() {
   setTimeout(async () => {
     try {
       const saved = JSON.parse(localStorage.getItem('cd_rd_autologin'));
-      if (!saved) return;
-      let u = RD_USERS_STATIC[saved.id];
-      if (!u) {
-        try {
-          const snap = await _db.ref('cd/rduser_' + saved.id).once('value');
-          if (snap.exists()) u = snap.val();
-        } catch(e) { u = gs('rduser_' + saved.id); }
-      }
-      if (u && u.password === saved.pw) {
-        currentRD = { ...u, id: saved.id };
-        await warmCache();
-        launchRdApp();
+      if (saved && saved.id && saved.pw) {
+        let u = RD_USERS_STATIC[saved.id];
+        if (!u && _db) {
+          try {
+            const snap = await _db.ref('cd/rduser_' + saved.id).once('value');
+            if (snap.exists()) u = snap.val();
+          } catch(e) { u = gs('rduser_' + saved.id); }
+        }
+        if (u && u.password === saved.pw) {
+          currentRD = { ...u, id: saved.id };
+          await warmCache();
+          launchRdApp();
+          return;
+        }
       }
     } catch(e) {}
+    // No valid session → hide loading, show login
+    document.getElementById('rd-loading-screen').style.display = 'none';
+    document.getElementById('login-screen').style.display = 'flex';
   }, 500);
 })();
 
