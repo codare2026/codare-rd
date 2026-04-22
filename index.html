@@ -35,7 +35,7 @@ async function sbWrite(key, val) {
       await fetch(`${SB_URL}/rest/v1/cd`, {
         method: 'POST',
         headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
-        body: JSON.stringify({ key, value: val })
+        body: JSON.stringify({ key, value: val, updated_at: new Date().toISOString() })
       });
     }
   } catch(e) { console.warn('Supabase write error:', e.message); }
@@ -56,7 +56,7 @@ function preloadLocalCache() {
   } catch(e) {}
 }
 
-// ── warmCache：精準抓本 RD 的學員資料，可擴充到數百學員 ──
+// ── warmCache：增量同步，大幅節省流量 ──
 async function warmCache() {
   preloadLocalCache();
 
@@ -66,7 +66,7 @@ async function warmCache() {
     try {
       const res = await Promise.race([
         fetch(url, { headers: GET_HDRS }),
-        new Promise((_, r) => setTimeout(() => r(new Error('t')), 5000))
+        new Promise((_, r) => setTimeout(() => r(new Error('t')), 6000))
       ]);
       if (!res.ok) return [];
       const data = await res.json();
@@ -84,45 +84,49 @@ async function warmCache() {
     }
   });
 
-  // Step 1: 抓本 RD 的自身資料（rduser_/rd_students_/rd_status_/rd_order_）
-  const rdPhone = currentRD?.id || '';
-  const rdRows = await safeGet(
-    `${SB_URL}/rest/v1/cd?key=ilike.%25${rdPhone}%25&select=key,value&limit=100`
-  );
-  // 也抓所有 rduser_（動態帳號）
-  const [rduserRows, rdStuRows] = await Promise.all([
-    safeGet(`${SB_URL}/rest/v1/cd?key=ilike.rduser_%25&select=key,value&limit=50`),
-    safeGet(`${SB_URL}/rest/v1/cd?key=eq.rd_students_${rdPhone}&select=key,value`)
-  ]);
-  save([...rdRows, ...rduserRows, ...rdStuRows]);
+  const rdId = currentRD?.id || '';
+  const lastSyncKey = 'cd_last_sync_rd_' + rdId;
+  const lastSync = localStorage.getItem(lastSyncKey);
+  const now = new Date().toISOString();
 
-  // Step 2: 從 rd_students_ 拿學員清單
-  const stuListKey = `rd_students_${rdPhone}`;
-  const stuList = _cache[stuListKey];
-  
-  // 也從 cache 抓所有 dynuser_（補漏網之魚）
-  const allDynRows = await safeGet(
-    `${SB_URL}/rest/v1/cd?key=ilike.dynuser_%25&select=key,value&limit=200`
-  );
-  save(allDynRows);
+  if (lastSync) {
+    // 增量同步：只抓上次同步後有變動的資料（大幅節省流量）
+    const rows = await safeGet(
+      `${SB_URL}/rest/v1/cd?updated_at=gt.${encodeURIComponent(lastSync)}&select=key,value&limit=500&order=updated_at`
+    );
+    save(rows);
+    if (rows.length > 0) localStorage.setItem(lastSyncKey, now);
+  } else {
+    // 第一次登入：完整同步本 RD 相關資料
+    // Step 1: 抓 RD 本身資料 + 所有 dynuser_（找出本 RD 的學員）
+    const [rdRows, dynRows, rduserRows] = await Promise.all([
+      safeGet(`${SB_URL}/rest/v1/cd?key=ilike.%25${rdId}%25&select=key,value&limit=100`),
+      safeGet(`${SB_URL}/rest/v1/cd?key=ilike.dynuser_%25&select=key,value&limit=200`),
+      safeGet(`${SB_URL}/rest/v1/cd?key=ilike.rduser_%25&select=key,value&limit=50`),
+    ]);
+    save([...rdRows, ...dynRows, ...rduserRows]);
 
-  // 建立學員清單：rd_students_ + 所有屬於本 RD 的 dynuser_
-  const studentIds = new Set();
-  if (Array.isArray(stuList)) stuList.forEach(id => studentIds.add(String(id)));
-  allDynRows.forEach(({ key, value }) => {
-    if (key.startsWith('dynuser_') && value?.rd === rdPhone) {
-      studentIds.add(key.replace('dynuser_', ''));
+    // Step 2: 找出本 RD 的學員，抓各自資料
+    const studentIds = new Set();
+    const stuList = _cache[`rd_students_${rdId}`];
+    if (Array.isArray(stuList)) stuList.forEach(id => studentIds.add(String(id)));
+    dynRows.forEach(({ key, value }) => {
+      if (key.startsWith('dynuser_') && value?.rd === rdId) {
+        studentIds.add(key.replace('dynuser_', ''));
+      }
+    });
+
+    if (studentIds.size > 0) {
+      const fetches = [...studentIds].map(phone =>
+        safeGet(`${SB_URL}/rest/v1/cd?key=ilike.%25${phone}%25&select=key,value&limit=200`)
+      );
+      const results = await Promise.all(fetches);
+      results.forEach(rows => save(rows));
     }
-  });
 
-  if (studentIds.size === 0) return;
-
-  // Step 3: 並行抓每個學員的所有資料（ilike.%phone%）
-  const studentFetches = [...studentIds].map(phone =>
-    safeGet(`${SB_URL}/rest/v1/cd?key=ilike.%25${phone}%25&select=key,value&limit=200`)
-  );
-  const results = await Promise.all(studentFetches);
-  results.forEach(rows => save(rows));
+    // 記錄本次同步時間
+    localStorage.setItem(lastSyncKey, now);
+  }
 }
 
 function bgSync() {
@@ -847,6 +851,13 @@ function doRdLogout() {
   document.getElementById('rd-pw').value = '';
   document.getElementById('rd-keep').checked = false;
   Object.keys(_cache).forEach(k => delete _cache[k]);
+  // 登出時清除增量同步時間戳，下次登入重新完整同步
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('cd_last_sync_')) localStorage.removeItem(k);
+    }
+  } catch(e) {}
 }
 
 // Auto-login：最多等 0.3 秒，之後直接顯示登入畫面
