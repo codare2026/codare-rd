@@ -26,6 +26,34 @@ function ss(key, val) {
   sbWrite(key, val);
 }
 
+// ── 上傳檔案到 Supabase Storage ──
+async function uploadToStorage(dataUrl, fileName, folder) {
+  try {
+    // Convert base64 dataUrl to blob
+    const arr = dataUrl.split(',');
+    const mime = arr[0].match(/:(.*?);/)[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while(n--) u8arr[n] = bstr.charCodeAt(n);
+    const blob = new Blob([u8arr], { type: mime });
+    
+    const ext = mime === 'application/pdf' ? 'pdf' : 'jpg';
+    const path = `${folder}/${Date.now()}_${fileName.replace(/[^a-zA-Z0-9.]/g,'_')}.${ext}`;
+    
+    const res = await fetch(`${SB_URL}/storage/v1/object/ency/${path}`, {
+      method: 'POST',
+      headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': mime, 'x-upsert': 'true' },
+      body: blob
+    });
+    if (!res.ok) throw new Error('Storage upload failed');
+    return `${SB_URL}/storage/v1/object/public/ency/${path}`;
+  } catch(e) {
+    console.warn('Storage upload failed, using base64:', e.message);
+    return null; // caller will fallback to base64
+  }
+}
+
 // ── Supabase 寫入（使用 upsert 確保跨裝置同步） ──
 async function sbWrite(key, val) {
   try {
@@ -3351,7 +3379,7 @@ function renderMaterials() {
       : item.daysLeft !== null
         ? `<span style="color:var(--g4);font-size:11px">剩 ${item.daysLeft} 天</span>`
         : '<span style="color:var(--g4);font-size:11px">—</span>';
-    const actionBtn = item.fileData
+    const actionBtn = (item.fileUrl || item.fileData)
       ? `<button class="btn btn-outline btn-sm" onclick="previewEncy(${i},'${s.id}')">預覽</button>`
       : item.linkUrl
         ? `<a href="${item.linkUrl}" target="_blank" rel="noopener"><button class="btn btn-outline btn-sm" type="button">開啟連結</button></a>`
@@ -3614,19 +3642,20 @@ function readEncyFile(file) { readEncyFiles([file]); }
 function previewEncy(idx, studentId) {
   const items = gs(`ency_${studentId}`) || [];
   const item = items[idx];
-  if (!item || !item.fileData) return;
+  const src = item?.fileUrl || item?.fileData;
+  if (!src) return;
   if (item.fileType === 'pdf') {
     const w = window.open();
-    w.document.write(`<iframe src="${item.fileData}" width="100%" height="100%" style="border:none"></iframe>`);
+    w.document.write(`<html><body style="margin:0"><iframe src="${src}" width="100%" height="100%" style="border:none;position:fixed;inset:0"></iframe></body></html>`);
   } else {
     const w = window.open();
-    w.document.write(`<img src="${item.fileData}" style="max-width:100%;display:block;margin:auto">`);
+    w.document.write(`<html><body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="${src}" style="max-width:100%;max-height:100vh;object-fit:contain"></body></html>`);
   }
 }
 
 function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendingEncyFiles = []; encyTabMode = 'file'; document.getElementById('main-content').innerHTML = renderMaterials(); }
 
-function addEncy(studentId) {
+async function addEncy(studentId) {
   const title = document.getElementById('ency-title')?.value?.trim();
   const desc = getEncyDesc();   // selected option value = catKey or course_N
   if (!title) { showToast('請選擇教材類型'); return; }
@@ -3660,20 +3689,28 @@ function addEncy(studentId) {
         icon: category === 'course' ? '🎥' : '📋'
       });
     } else if (pendingEncyFiles.length > 0) {
-      pendingEncyFiles.forEach(f => {
+      // 上傳到 Supabase Storage，只存 URL（大幅節省流量）
+      showLoading('上傳教材中…');
+      const uploadPromises = pendingEncyFiles.map(async (f) => {
         const fileType = f.type === 'application/pdf' ? 'pdf' : 'image';
-        existingItems.push({
+        const storageUrl = await uploadToStorage(f.data, f.name, `${studentId}/${catKey}`);
+        return {
           title,
-          desc: catKey,   // ← always the routing key, NOT the filename
+          desc: catKey,
           catKey,
           descLabel: pendingEncyFiles.length === 1 ? descLabel : `${descLabel} — ${f.name}`,
           fileName: f.name,
           category,
           uploadedAt: Date.now(), uploadedAtStr: new Date().toLocaleDateString('zh-TW'),
-          fileData: f.data, fileType,
+          fileUrl: storageUrl || null,   // Storage URL（省流量）
+          fileData: storageUrl ? null : f.data, // fallback: base64（Storage失敗時）
+          fileType,
           icon: fileType === 'pdf' ? '📄' : '🖼️'
-        });
+        };
       });
+      const uploaded = await Promise.all(uploadPromises);
+      uploaded.forEach(item => existingItems.push(item));
+      hideLoading();
     } else {
       existingItems.push({
         title, desc: catKey, catKey, descLabel, category,
