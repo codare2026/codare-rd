@@ -56,7 +56,7 @@ function preloadLocalCache() {
   } catch(e) {}
 }
 
-// ── warmCache：分批精確查詢，快速同步所有資料 ──
+// ── warmCache：用 gte/lte 範圍查詢，完全避開 SQL _ 萬用字元問題 ──
 async function warmCache() {
   preloadLocalCache();
 
@@ -71,75 +71,64 @@ async function warmCache() {
     } catch(e) { return []; }
   };
 
-  // 取得所有學員 id（從 cache 或 localStorage）
-  const getStudentIds = () => {
-    const ids = new Set();
-    // 從 rd_students_ 抓
-    Object.keys(_cache).forEach(k => {
-      if (k.startsWith('rd_students_')) {
-        const list = _cache[k];
-        if (Array.isArray(list)) list.forEach(id => ids.add(id));
-      }
-    });
-    // 也從 localStorage 抓
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('cd_rd_students_')) {
-          try {
-            const list = JSON.parse(localStorage.getItem(key));
-            if (Array.isArray(list)) list.forEach(id => ids.add(id));
-          } catch(e) {}
-        }
-      }
-    } catch(e) {}
-    return [...ids];
+  // gte/lte 範圍查詢：完全不用 LIKE，不受 _ 萬用字元影響
+  // "prefix~" 中的 ~ 是 ASCII 126，大於所有英數字，所以 gte(prefix) & lte(prefix~) 等於 startsWith(prefix)
+  const rangeGet = async (prefix) => {
+    return safeGet(`${SB_URL}/rest/v1/cd?key=gte.${encodeURIComponent(prefix)}&key=lte.${encodeURIComponent(prefix + '~')}&select=key,value&limit=500`);
   };
 
-  // 批次 1：RD 帳號 + 學員清單（固定 key，用 like）
-  const rdRows = await safeGet(
-    `${SB_URL}/rest/v1/cd?or=(key.like.rduser_%,key.like.rd_students_%,key.like.rd_status_%,key.like.rd_order_%)&select=key,value&limit=200`
-  );
-  rdRows.forEach(({ key, value }) => {
+  const save = (rows) => rows.forEach(({ key, value }) => {
     _cache[key] = value;
     try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-    // 載入動態 RD 帳號
     if (key.startsWith('rduser_')) {
       const rid = key.replace('rduser_', '');
       if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
     }
   });
 
-  // 批次 2：依學員 id 精確查 ency_ 和 menus_（這是顯示問題的根源）
-  const studentIds = getStudentIds();
-  if (studentIds.length > 0) {
-    const exactKeys = studentIds.flatMap(id => [
-      `ency_${id}`, `menus_${id}`, `intake_${id}`, `progress_${id}`,
-      `inbox_${id}`, `dynuser_${id}`, `body_notif_${id}`, `btNote_${id}`
-    ]);
-    const inFilter = exactKeys.map(k => `"${k}"`).join(',');
-    const exactRows = await safeGet(
-      `${SB_URL}/rest/v1/cd?key=in.(${inFilter})&select=key,value`
-    );
-    exactRows.forEach(({ key, value }) => {
-      _cache[key] = value;
-      try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-    });
+  // 批次 1：拿 RD 相關 key（rduser_ / rd_students_ / rd_status_ / rd_order_）
+  const [r1, r2, r3, r4] = await Promise.all([
+    rangeGet('rduser_'),
+    rangeGet('rd_students_'),
+    rangeGet('rd_status_'),
+    rangeGet('rd_order_'),
+  ]);
+  const rdRows = [...r1, ...r2, ...r3, ...r4];
+  save(rdRows);
 
-    // 批次 3：有日期後綴的 key（food_/wplan_/goals_）— 用 like，分批避免 timeout
-    const likeFilter = studentIds.flatMap(id => [
-      `key.like.food_${id}%`,
-      `key.like.wplan_${id}%`,
-      `key.like.goals_${id}%`,
-    ]).join(',');
-    const likeRows = await safeGet(
-      `${SB_URL}/rest/v1/cd?or=(${likeFilter})&select=key,value&limit=1000`
-    );
-    likeRows.forEach(({ key, value }) => {
-      _cache[key] = value;
-      try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-    });
-  }
+  // 從 rd_students_ 抽出學員 id
+  const studentIds = new Set();
+  rdRows.forEach(({ key, value }) => {
+    if (key.startsWith('rd_students_') && Array.isArray(value)) {
+      value.forEach(id => studentIds.add(String(id)));
+    }
+  });
+
+  if (studentIds.size === 0) return;
+  const ids = [...studentIds];
+
+  // 批次 2：精確 key — 用 in() 一次抓（最快，不用 LIKE）
+  const exactKeys = ids.flatMap(id => [
+    `ency_${id}`, `menus_${id}`, `intake_${id}`,
+    `progress_${id}`, `dynuser_${id}`, `body_notif_${id}`,
+    `btNote_${id}`, `inbox_${id}`
+  ]);
+  // in() 用雙引號包 key
+  const inFilter = exactKeys.map(k => `"${k}"`).join(',');
+  const exactRows = await safeGet(
+    `${SB_URL}/rest/v1/cd?key=in.(${inFilter})&select=key,value`
+  );
+  save(exactRows);
+
+  // 批次 3：有日期後綴的 key — 每個學員各一個 rangeGet，全部並行
+  const datedPrefixes = ids.flatMap(id => [
+    `food_${id}_`, `wplan_${id}_`, `goals_${id}_`, `daily_goals_${id}_`
+  ]);
+  const datedRows = await Promise.all(datedPrefixes.map(p => rangeGet(p)));
+  datedRows.flat().forEach(({ key, value }) => {
+    _cache[key] = value;
+    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+  });
 }
 
 function bgSync() {
@@ -198,8 +187,9 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--g0); color: va
 
 /* ── LOGIN ── */
 #login-screen {
-  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, #0f766e 0%, #134e4a 100%); padding: 24px;
+  z-index: 9999; overflow-y: auto;
 }
 .login-box {
   background: #fff; border-radius: 20px; padding: 40px 36px;
@@ -566,7 +556,7 @@ body.sidebar-collapsed .main { margin-left: 0; }
 </div>
 
 <!-- ══ APP ══ -->
-<div id="app">
+<div id="app" style="display:none">
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand">
       <div class="sb-brand-name">🦁 Co-Dare</div>
