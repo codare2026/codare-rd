@@ -56,14 +56,16 @@ function preloadLocalCache() {
   } catch(e) {}
 }
 
-// ── warmCache：用 gte/lte 範圍查詢，完全避開 SQL _ 萬用字元問題 ──
+// ── warmCache：limit=500 抓全部，快速省量 ──
 async function warmCache() {
   preloadLocalCache();
+
+  const hdrs = { ...SB_HDRS, 'Prefer': 'count=none' };
 
   const safeGet = async (url) => {
     try {
       const res = await Promise.race([
-        fetch(url, { headers: SB_HDRS }),
+        fetch(url, { headers: hdrs }),
         new Promise((_, r) => setTimeout(() => r(new Error('t')), 5000))
       ]);
       if (!res.ok) return [];
@@ -71,68 +73,24 @@ async function warmCache() {
     } catch(e) { return []; }
   };
 
-  // gte/lte 範圍查詢：完全不用 LIKE，不受 _ 萬用字元影響
-  // "prefix~" 中的 ~ 是 ASCII 126，大於所有英數字，所以 gte(prefix) & lte(prefix~) 等於 startsWith(prefix)
-  const rangeGet = async (prefix) => {
-    return safeGet(`${SB_URL}/rest/v1/cd?key=gte.${encodeURIComponent(prefix)}&key=lte.${encodeURIComponent(prefix + '~')}&select=key,value&limit=500`);
+  const save = (rows) => {
+    if (!Array.isArray(rows)) return;
+    rows.forEach(({ key, value }) => {
+      if (!key) return;
+      _cache[key] = value;
+      try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+      if (key.startsWith('rduser_')) {
+        const rid = key.replace('rduser_', '');
+        if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
+      }
+    });
   };
 
-  const save = (rows) => rows.forEach(({ key, value }) => {
-    _cache[key] = value;
-    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-    if (key.startsWith('rduser_')) {
-      const rid = key.replace('rduser_', '');
-      if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
-    }
-  });
-
-  // 批次 1：拿 RD 相關 key（rduser_ / rd_students_ / rd_status_ / rd_order_）
-  const [r1, r2, r3, r4] = await Promise.all([
-    rangeGet('rduser_'),
-    rangeGet('rd_students_'),
-    rangeGet('rd_status_'),
-    rangeGet('rd_order_'),
-  ]);
-  const rdRows = [...r1, ...r2, ...r3, ...r4];
-  save(rdRows);
-
-  // 從 rd_students_ 抽出學員 id
-  const studentIds = new Set();
-  rdRows.forEach(({ key, value }) => {
-    if (key.startsWith('rd_students_') && Array.isArray(value)) {
-      value.forEach(id => studentIds.add(String(id)));
-    }
-  });
-
-  // 永遠也抓所有 dynuser_ key，補足 rd_students_ 可能的缺漏
-  const dynRows = await rangeGet('dynuser_');
-  dynRows.forEach(({ key, value }) => {
-    save([{ key, value }]);
-    if (key.startsWith('dynuser_')) {
-      const id = key.replace('dynuser_', '');
-      if (id && value?.name) studentIds.add(id);
-    }
-  });
-
-  if (studentIds.size === 0) return;
-  const ids = [...studentIds];
-
-  // 批次 2+3：用 rangeGet 抓每個學員所有資料（完全避開 in() 引號問題）
-  const allPrefixes = ids.flatMap(id => [
-    `ency_${id}`,          // 教材
-    `menus_${id}`,         // 菜單
-    `intake_${id}`,        // 建檔
-    `progress_${id}`,      // 體態
-    `dynuser_${id}`,       // 學員資料
-    `body_notif_${id}`,    // 體態通知
-    `inbox_${id}`,         // 收件匣
-    `food_${id}_`,         // 飲食（有日期後綴）
-    `wplan_${id}_`,        // 週計畫
-    `goals_${id}_`,        // 目標
-    `daily_goals_${id}_`,  // 每日目標
-  ]);
-  const allRows = await Promise.all(allPrefixes.map(p => rangeGet(p)));
-  allRows.flat().forEach(row => { if(row) save([row]); });
+  // 一次抓全部（limit=500 涵蓋所有資料，Prefer:count=none 加速）
+  const rows = await safeGet(
+    `${SB_URL}/rest/v1/cd?select=key,value&limit=500&order=key`
+  );
+  save(rows);
 }
 
 function bgSync() {
