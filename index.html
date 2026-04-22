@@ -104,31 +104,37 @@ async function warmCache() {
     }
   });
 
+  // 如果 rd_students_ 沒有資料，備援：抓所有 dynuser_ key
+  if (studentIds.size === 0) {
+    const dynRows = await rangeGet('dynuser_');
+    dynRows.forEach(({ key, value }) => {
+      save([{ key, value }]);
+      if (key.startsWith('dynuser_')) {
+        const id = key.replace('dynuser_', '');
+        if (id && value?.name) studentIds.add(id);
+      }
+    });
+  }
+
   if (studentIds.size === 0) return;
   const ids = [...studentIds];
 
-  // 批次 2：精確 key — 用 in() 一次抓（最快，不用 LIKE）
-  const exactKeys = ids.flatMap(id => [
-    `ency_${id}`, `menus_${id}`, `intake_${id}`,
-    `progress_${id}`, `dynuser_${id}`, `body_notif_${id}`,
-    `btNote_${id}`, `inbox_${id}`
+  // 批次 2+3：用 rangeGet 抓每個學員所有資料（完全避開 in() 引號問題）
+  const allPrefixes = ids.flatMap(id => [
+    `ency_${id}`,          // 教材
+    `menus_${id}`,         // 菜單
+    `intake_${id}`,        // 建檔
+    `progress_${id}`,      // 體態
+    `dynuser_${id}`,       // 學員資料
+    `body_notif_${id}`,    // 體態通知
+    `inbox_${id}`,         // 收件匣
+    `food_${id}_`,         // 飲食（有日期後綴）
+    `wplan_${id}_`,        // 週計畫
+    `goals_${id}_`,        // 目標
+    `daily_goals_${id}_`,  // 每日目標
   ]);
-  // in() 用雙引號包 key
-  const inFilter = exactKeys.map(k => `"${k}"`).join(',');
-  const exactRows = await safeGet(
-    `${SB_URL}/rest/v1/cd?key=in.(${inFilter})&select=key,value`
-  );
-  save(exactRows);
-
-  // 批次 3：有日期後綴的 key — 每個學員各一個 rangeGet，全部並行
-  const datedPrefixes = ids.flatMap(id => [
-    `food_${id}_`, `wplan_${id}_`, `goals_${id}_`, `daily_goals_${id}_`
-  ]);
-  const datedRows = await Promise.all(datedPrefixes.map(p => rangeGet(p)));
-  datedRows.flat().forEach(({ key, value }) => {
-    _cache[key] = value;
-    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-  });
+  const allRows = await Promise.all(allPrefixes.map(p => rangeGet(p)));
+  allRows.flat().forEach(row => { if(row) save([row]); });
 }
 
 function bgSync() {
@@ -804,24 +810,17 @@ async function doRdLogin() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('rd-loading-screen').style.display = 'none';
     launchRdApp();
-    // 背景載入動態 RD 帳號 + 完整資料
+    // 背景同步（登入後 300ms 執行，不阻擋 UI）
     setTimeout(async () => {
       try {
-        const rdRes = await fetch(`${SB_URL}/rest/v1/cd?key=like.rduser_%&select=key,value`, { headers: SB_HDRS });
-        if (rdRes.ok) {
-          const rows = await rdRes.json();
-          rows.forEach(({ key, value }) => {
-            const rid = key.replace('rduser_', '');
-            DYNAMIC_RD_USERS[rid] = value;
-            _cache[key] = value;
-          });
-        }
-        await warmCache();
+        await warmCache(); // warmCache 內部已包含 rduser_ 和所有學員資料
         updateBadge();
         // 靜默更新當前頁面
         const el = document.getElementById('main-content');
         if (el && currentSection) {
-          const renders = { dashboard: renderDashboard, feedback: renderFeedback, students: renderStudentsPage };
+          const renders = { dashboard: renderDashboard, feedback: renderFeedback,
+            students: renderStudentsPage, weekplan: renderWeekplan,
+            menu: renderMenuMgr, materials: renderMaterials };
           if (renders[currentSection]) el.innerHTML = renders[currentSection]();
         }
       } catch(e) { console.warn('bg sync failed:', e.message); }
@@ -885,7 +884,18 @@ function doRdLogout() {
         document.getElementById('rd-loading-screen').style.display = 'none';
         document.getElementById('login-screen').style.display = 'none';
         launchRdApp();
-        setTimeout(async () => { try { await warmCache(); updateBadge(); } catch(e) {} }, 500);
+        setTimeout(async () => {
+            try {
+              await warmCache();
+              updateBadge();
+              const el = document.getElementById('main-content');
+              if (el && currentSection) {
+                const r = { dashboard: renderDashboard, feedback: renderFeedback,
+                  students: renderStudentsPage, menu: renderMenuMgr, materials: renderMaterials };
+                if (r[currentSection]) el.innerHTML = r[currentSection]();
+              }
+            } catch(e) { console.warn('auto bg sync failed:', e.message); }
+          }, 300);
         return;
       }
       // 找不到就顯示登入畫面
@@ -2373,6 +2383,11 @@ async function submitAddStudent() {
   closeModal();
   document.getElementById('main-content').innerHTML = renderStudents();
   showIntakeModal(name, phone, pw);
+
+  // 5. 背景重新同步，確保新學員資料完整進入 cache
+  setTimeout(async () => {
+    try { await warmCache(); updateBadge(); } catch(e) {}
+  }, 1000);
 }
 
 function saveStudentInfo(studentId) {
