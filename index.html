@@ -104,17 +104,15 @@ async function warmCache() {
     }
   });
 
-  // 如果 rd_students_ 沒有資料，備援：抓所有 dynuser_ key
-  if (studentIds.size === 0) {
-    const dynRows = await rangeGet('dynuser_');
-    dynRows.forEach(({ key, value }) => {
-      save([{ key, value }]);
-      if (key.startsWith('dynuser_')) {
-        const id = key.replace('dynuser_', '');
-        if (id && value?.name) studentIds.add(id);
-      }
-    });
-  }
+  // 永遠也抓所有 dynuser_ key，補足 rd_students_ 可能的缺漏
+  const dynRows = await rangeGet('dynuser_');
+  dynRows.forEach(({ key, value }) => {
+    save([{ key, value }]);
+    if (key.startsWith('dynuser_')) {
+      const id = key.replace('dynuser_', '');
+      if (id && value?.name) studentIds.add(id);
+    }
+  });
 
   if (studentIds.size === 0) return;
   const ids = [...studentIds];
