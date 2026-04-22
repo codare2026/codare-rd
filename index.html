@@ -56,41 +56,73 @@ function preloadLocalCache() {
   } catch(e) {}
 }
 
-// ── warmCache：limit=500 抓全部，快速省量 ──
+// ── warmCache：精準抓本 RD 的學員資料，可擴充到數百學員 ──
 async function warmCache() {
   preloadLocalCache();
 
-  const hdrs = { ...SB_HDRS, 'Prefer': 'count=none' };
+  const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
 
   const safeGet = async (url) => {
     try {
       const res = await Promise.race([
-        fetch(url, { headers: hdrs }),
+        fetch(url, { headers: GET_HDRS }),
         new Promise((_, r) => setTimeout(() => r(new Error('t')), 5000))
       ]);
       if (!res.ok) return [];
-      return await res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     } catch(e) { return []; }
   };
 
-  const save = (rows) => {
-    if (!Array.isArray(rows)) return;
-    rows.forEach(({ key, value }) => {
-      if (!key) return;
-      _cache[key] = value;
-      try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
-      if (key.startsWith('rduser_')) {
-        const rid = key.replace('rduser_', '');
-        if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
-      }
-    });
-  };
+  const save = (rows) => rows.forEach(({ key, value }) => {
+    if (!key) return;
+    _cache[key] = value;
+    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+    if (key.startsWith('rduser_')) {
+      const rid = key.replace('rduser_', '');
+      if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
+    }
+  });
 
-  // 一次抓全部（limit=500 涵蓋所有資料，Prefer:count=none 加速）
-  const rows = await safeGet(
-    `${SB_URL}/rest/v1/cd?select=key,value&limit=500&order=key`
+  // Step 1: 抓本 RD 的自身資料（rduser_/rd_students_/rd_status_/rd_order_）
+  const rdPhone = currentRD?.id || '';
+  const rdRows = await safeGet(
+    `${SB_URL}/rest/v1/cd?key=ilike.%25${rdPhone}%25&select=key,value&limit=100`
   );
-  save(rows);
+  // 也抓所有 rduser_（動態帳號）
+  const [rduserRows, rdStuRows] = await Promise.all([
+    safeGet(`${SB_URL}/rest/v1/cd?key=ilike.rduser_%25&select=key,value&limit=50`),
+    safeGet(`${SB_URL}/rest/v1/cd?key=eq.rd_students_${rdPhone}&select=key,value`)
+  ]);
+  save([...rdRows, ...rduserRows, ...rdStuRows]);
+
+  // Step 2: 從 rd_students_ 拿學員清單
+  const stuListKey = `rd_students_${rdPhone}`;
+  const stuList = _cache[stuListKey];
+  
+  // 也從 cache 抓所有 dynuser_（補漏網之魚）
+  const allDynRows = await safeGet(
+    `${SB_URL}/rest/v1/cd?key=ilike.dynuser_%25&select=key,value&limit=200`
+  );
+  save(allDynRows);
+
+  // 建立學員清單：rd_students_ + 所有屬於本 RD 的 dynuser_
+  const studentIds = new Set();
+  if (Array.isArray(stuList)) stuList.forEach(id => studentIds.add(String(id)));
+  allDynRows.forEach(({ key, value }) => {
+    if (key.startsWith('dynuser_') && value?.rd === rdPhone) {
+      studentIds.add(key.replace('dynuser_', ''));
+    }
+  });
+
+  if (studentIds.size === 0) return;
+
+  // Step 3: 並行抓每個學員的所有資料（ilike.%phone%）
+  const studentFetches = [...studentIds].map(phone =>
+    safeGet(`${SB_URL}/rest/v1/cd?key=ilike.%25${phone}%25&select=key,value&limit=200`)
+  );
+  const results = await Promise.all(studentFetches);
+  results.forEach(rows => save(rows));
 }
 
 function bgSync() {
