@@ -1002,16 +1002,9 @@ function countPendingFeedback() {
   getActiveStudents().forEach(s => {
     buildStudentDates(s.start, s.end).forEach(d => {
       const data = gs(`food_${s.id}_${d}`);
-      if (!data || !data.notified) return;
-      // Red dot disappears once ANY feedback (meal or overall) has been sent
-      const hasAnyFeedback =
-        (Array.isArray(data.rdFeedbacks) && data.rdFeedbacks.length > 0) ||
-        !!data.rdFeedback ||
-        ['breakfast','snack1','lunch','snack2','dinner','latenight'].some(m =>
-          (Array.isArray(data[m + '_rdFeedbacks']) && data[m + '_rdFeedbacks'].length > 0) ||
-          !!data[m + '_rdFeedback']
-        );
-      if (!hasAnyFeedback) count++;
+      // 只要學員有儲存資料且 RD 未查看就算待處理（不需要按通知）
+      if (!data || (!data.hasData && !data.notified)) return;
+      if (!data.rdViewed) count++;
     });
   });
   return count;
@@ -1186,7 +1179,14 @@ function renderDashboard() {
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span class="student-name">${s.name}</span>
-          ${notified && !hasFb ? '<span class="pill urgent" style="font-size:10px">待回覆</span>' : hasFb ? '<span class="pill active" style="font-size:10px">已回覆</span>' : '<span class="pill ended" style="font-size:10px">未上傳</span>'}
+          ${(() => {
+            const hasContent = d && (d.hasData || d.notified);
+            const unread = hasContent && !d.rdViewed;
+            if (unread && !hasFb) return '<span class="pill urgent" style="font-size:10px">待查看</span>';
+            if (hasFb) return '<span class="pill active" style="font-size:10px">已回覆</span>';
+            if (hasContent) return '<span class="pill" style="font-size:10px;background:var(--teal-light);color:var(--teal-dark)">已查看</span>';
+            return '<span class="pill ended" style="font-size:10px">未上傳</span>';
+          })()}
           ${hasBodyNotif ? '<span style="background:#fee2e2;color:#ef4444;font-size:10px;padding:1px 6px;border-radius:8px;font-weight:700">⚖️ 體重更新</span>' : ''}
         </div>
         <div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap">
@@ -1360,9 +1360,10 @@ function renderFeedback() {
       const hasFb = food && (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks.length : food.rdFeedback);
       const isToday = d === today;
       let cls = 'day-chip';
+      const hasContent = food && (food.hasData || food.notified);
       if (d === selectedFeedbackDay) cls += ' active';
-      else if (notified && !hasFb) cls += ' notified';
-      else if (notified) cls += ' has-data';
+      else if (hasContent && !food.rdViewed) cls += ' notified';
+      else if (hasContent) cls += ' has-data';
       return `<button class="${cls}" onclick="selectFeedbackDay('${d}')">${d}${isToday ? '▸' : ''}</button>`;
     }).join('');
     return `<div style="margin-bottom:10px">
@@ -1556,12 +1557,31 @@ function switchFeedbackStudent(id) {
 
 function selectFeedbackDay(d) {
   selectedFeedbackDay = d;
+  // 標記 RD 已查看，紅點消失
+  if (feedbackStudentId) {
+    const key = `food_${feedbackStudentId}_${d}`;
+    const existing = gs(key);
+    if (existing && !existing.rdViewed) {
+      existing.rdViewed = true;
+      existing.rdViewedAt = new Date().toISOString();
+      ss(key, existing);
+    }
+  }
   document.getElementById('main-content').innerHTML = renderFeedback();
+  updateBadge();
 }
 
 function openFeedbackForStudent(id, day) {
   feedbackStudentId = id;
   selectedFeedbackDay = day;
+  // 標記 RD 已查看當天
+  const key = `food_${id}_${day}`;
+  const existing = gs(key);
+  if (existing && !existing.rdViewed) {
+    existing.rdViewed = true;
+    existing.rdViewedAt = new Date().toISOString();
+    ss(key, existing);
+  }
   showSection('feedback');
 }
 
