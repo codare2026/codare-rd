@@ -1555,34 +1555,68 @@ function switchFeedbackStudent(id) {
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
 
+// 直接從 Supabase 抓特定學員特定天的最新資料（繞過增量快取）
+async function refreshStudentDay(studentId, day) {
+  if (!studentId) return;
+  try {
+    const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
+    const key = `food_${studentId}_${day}`;
+    const res = await fetch(
+      `${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}&select=key,value`,
+      { headers: GET_HDRS }
+    );
+    if (res.ok) {
+      const rows = await res.json();
+      if (rows[0]) {
+        _cache[key] = rows[0].value;
+        try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
+      }
+    }
+  } catch(e) {}
+}
+
 function selectFeedbackDay(d) {
   selectedFeedbackDay = d;
-  // 標記 RD 已查看，紅點消失
-  if (feedbackStudentId) {
-    const key = `food_${feedbackStudentId}_${d}`;
-    const existing = gs(key);
-    if (existing && !existing.rdViewed) {
-      existing.rdViewed = true;
-      existing.rdViewedAt = new Date().toISOString();
-      ss(key, existing);
-    }
-  }
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
+  // 背景從 Supabase 抓最新資料（確保心情、照片等都是最新的）
+  if (feedbackStudentId) {
+    refreshStudentDay(feedbackStudentId, d).then(() => {
+      // 標記 RD 已查看
+      const key = `food_${feedbackStudentId}_${d}`;
+      const existing = gs(key);
+      if (existing) {
+        if (!existing.rdViewed) {
+          existing.rdViewed = true;
+          existing.rdViewedAt = new Date().toISOString();
+          ss(key, existing);
+        }
+        // 重新渲染以顯示最新資料（含心情）
+        document.getElementById('main-content').innerHTML = renderFeedback();
+        updateBadge();
+      }
+    });
+  }
 }
 
 function openFeedbackForStudent(id, day) {
   feedbackStudentId = id;
   selectedFeedbackDay = day;
-  // 標記 RD 已查看當天
-  const key = `food_${id}_${day}`;
-  const existing = gs(key);
-  if (existing && !existing.rdViewed) {
-    existing.rdViewed = true;
-    existing.rdViewedAt = new Date().toISOString();
-    ss(key, existing);
-  }
   showSection('feedback');
+  // 背景刷新最新資料
+  refreshStudentDay(id, day).then(() => {
+    const key = `food_${id}_${day}`;
+    const existing = gs(key);
+    if (existing) {
+      if (!existing.rdViewed) {
+        existing.rdViewed = true;
+        existing.rdViewedAt = new Date().toISOString();
+        ss(key, existing);
+      }
+      document.getElementById('main-content').innerHTML = renderFeedback();
+      updateBadge();
+    }
+  });
 }
 
 // ── 送入收件夾 helper ──
