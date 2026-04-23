@@ -822,8 +822,8 @@ async function doRdLogin() {
     currentRD = { ...u, id };
 
     document.getElementById('rd-err').style.display = 'none';
-    if (keep) localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
-    else localStorage.removeItem('cd_rd_autologin');
+    // 永遠維持登入（除非使用者主動登出）
+    localStorage.setItem('cd_rd_autologin', JSON.stringify({ id, pw }));
 
     // 立即啟動 App，背景同步 Supabase 資料（不讓使用者等待）
     preloadLocalCache();
@@ -1068,6 +1068,9 @@ function toggleSidebar() {
 async function syncRdData() {
   showLoading('同步資料中…');
   try {
+    // 手動同步：清除增量時間戳，強制完整同步
+    const rdId = currentRD?.id || '';
+    localStorage.removeItem('cd_last_sync_rd_' + rdId);
     await warmCache(); // Full sync when user explicitly requests
     hideLoading();
     showToast('✅ 資料已同步！');
@@ -1467,7 +1470,13 @@ function renderFeedback() {
       </div>
       <textarea class="feedback-input" id="fb-input" placeholder="新增一則整日總結…"></textarea>
       <div style="display:flex;gap:8px;margin-top:10px;justify-content:flex-end;flex-wrap:wrap">
-        <button class="btn btn-outline btn-sm" onclick="insertTemplate()">插入常用語句</button>
+        <div style="display:flex;gap:6px;align-items:center;flex:1">
+          <select id="template-select" onchange="insertSelectedTemplate(this)" style="flex:1;padding:6px 10px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff;cursor:pointer" title="選擇常用語句插入">
+            <option value="">📋 選擇常用語句…</option>
+            ${getRdTemplates().map((t,i) => `<option value="${i}">${t.length > 30 ? t.slice(0,30)+'…' : t}</option>`).join('')}
+            <option value="__add__">＋ 新增自訂語句</option>
+          </select>
+        </div>
         <button class="btn btn-teal" onclick="saveFeedback('${s.id}','${selectedFeedbackDay}')">✅ 新增總結回覆</button>
       </div>
 
@@ -1680,18 +1689,93 @@ function notifyFeedbackDone(studentId, day) {
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
 
-function insertTemplate() {
-  const templates = [
-    '今天的飲食整體均衡，繼續保持！',
-    '蔬菜攝取量不足，下餐可以多補充一份深色蔬菜。',
-    '蛋白質攝取良好，有助於肌肉維持與飽足感。',
-    '碳水化合物稍多，建議下一餐以蔬菜為主、減少澱粉。',
-    '飲水量不足，記得多補充水分，目標每天 1500ml 以上！',
-    '今天很棒！三餐均衡、運動也有完成，繼續加油💪',
-  ];
-  const pick = templates[Math.floor(Math.random() * templates.length)];
+// ── 常用語句管理 ──
+const DEFAULT_TEMPLATES = [
+  '今天的飲食整體均衡，繼續保持！',
+  '蔬菜攝取量不足，下餐可以多補充一份深色蔬菜。',
+  '蛋白質攝取良好，有助於肌肉維持與飽足感。',
+  '碳水化合物稍多，建議下一餐以蔬菜為主、減少澱粉。',
+  '飲水量不足，記得多補充水分，目標每天 1500ml 以上！',
+  '今天很棒！三餐均衡、運動也有完成，繼續加油💪',
+  '油脂攝取偏多，建議改用蒸煮方式烹調。',
+  '水果攝取量足夠，但注意份量控制，避免血糖波動。',
+  '今日記錄很詳細，辛苦了！繼續保持好習慣。',
+];
+
+function getRdTemplates() {
+  const rdId = currentRD?.id || 'default';
+  const custom = gs(`rd_templates_${rdId}`) || [];
+  return [...DEFAULT_TEMPLATES, ...custom];
+}
+
+function insertSelectedTemplate(sel) {
+  const val = sel.value;
+  if (!val) return;
+  if (val === '__add__') {
+    sel.value = '';
+    openAddTemplateModal();
+    return;
+  }
+  const templates = getRdTemplates();
+  const text = templates[parseInt(val)];
+  if (!text) { sel.value = ''; return; }
   const ta = document.getElementById('fb-input');
-  if (ta) { ta.value = (ta.value ? ta.value + '\n' : '') + pick; ta.focus(); }
+  if (ta) { ta.value = (ta.value ? ta.value + '\n' : '') + text; ta.focus(); }
+  sel.value = '';
+}
+
+function renderExistingTemplates() {
+  const rdId = currentRD?.id || 'default';
+  const custom = gs('rd_templates_' + rdId) || [];
+  if (!custom.length) return '<div style="font-size:12px;color:var(--g4)">尚無自訂語句</div>';
+  return '<div style="font-size:12px;font-weight:700;color:var(--g5);margin-bottom:6px">已有自訂語句：</div>' +
+    custom.map((t, i) => '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--g1)">' +
+      '<span style="flex:1;font-size:13px">' + t + '</span>' +
+      '<button onclick="deleteCustomTemplate(' + i + ')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
+    '</div>').join('');
+}
+
+function openAddTemplateModal() {
+  showModal('＋ 新增自訂常用語句', `
+    <div style="font-size:13px;color:var(--g5);margin-bottom:10px">新增後會出現在下拉選單，只有你自己看得到。</div>
+    <div class="fld">
+      <label>語句內容</label>
+      <textarea id="new-template-text" rows="3" style="width:100%;padding:10px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:14px;font-family:inherit;resize:none;outline:none" placeholder="輸入要新增的常用語句…"></textarea>
+    </div>
+    <div id="existing-templates-list" style="margin-top:10px">
+      ${renderExistingTemplates()}
+    </div>
+  `, [
+    { label: '取消', action: 'closeModal()', style: 'btn-outline' },
+    { label: '新增', action: 'saveNewTemplate()', style: 'btn-teal' }
+  ]);
+}
+
+function saveNewTemplate() {
+  const text = document.getElementById('new-template-text')?.value?.trim();
+  if (!text) { showToast('請輸入語句內容'); return; }
+  const rdId = currentRD?.id || 'default';
+  const custom = gs(`rd_templates_${rdId}`) || [];
+  custom.push(text);
+  ss(`rd_templates_${rdId}`, custom);
+  closeModal();
+  showToast('✅ 已新增常用語句！');
+  // 重新渲染回饋頁讓下拉更新
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function deleteCustomTemplate(idx) {
+  const rdId = currentRD?.id || 'default';
+  const custom = gs(`rd_templates_${rdId}`) || [];
+  custom.splice(idx, 1);
+  ss(`rd_templates_${rdId}`, custom);
+  closeModal();
+  showToast('🗑️ 已刪除');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function insertTemplate() {
+  // Legacy - kept for compat, not used
 }
 
 // ── 通知學員：週計畫 / 體態 / 教材 / 菜單 已更新 ──
