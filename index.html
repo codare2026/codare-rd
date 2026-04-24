@@ -1589,19 +1589,9 @@ function selectFeedbackDay(d) {
   // 背景從 Supabase 抓最新資料（確保心情、照片等都是最新的）
   if (feedbackStudentId) {
     refreshStudentDay(feedbackStudentId, d).then(() => {
-      // 標記 RD 已查看
-      const key = `food_${feedbackStudentId}_${d}`;
-      const existing = gs(key);
-      if (existing) {
-        if (!existing.rdViewed) {
-          existing.rdViewed = true;
-          existing.rdViewedAt = new Date().toISOString();
-          ss(key, existing);
-        }
-        // 重新渲染以顯示最新資料（含心情）
-        document.getElementById('main-content').innerHTML = renderFeedback();
-        updateBadge();
-      }
+      markRdViewed(feedbackStudentId, d);
+      document.getElementById('main-content').innerHTML = renderFeedback();
+      updateBadge();
     });
   }
 }
@@ -1636,6 +1626,17 @@ function pushInbox(studentId, msg) {
   ss(key, arr);
 }
 
+// 標記 RD 已查看並清除紅點
+function markRdViewed(studentId, day) {
+  const key = `food_${studentId}_${day}`;
+  const existing = gs(key);
+  if (existing && !existing.rdViewed) {
+    existing.rdViewed = true;
+    existing.rdViewedAt = new Date().toISOString();
+    ss(key, existing);
+  }
+}
+
 function saveFeedback(studentId, day) {
   const text = document.getElementById('fb-input')?.value?.trim();
   if (!text) { showToast('請先輸入回覆內容'); return; }
@@ -1646,7 +1647,10 @@ function saveFeedback(studentId, day) {
   existing.rdFeedbacks = arr;
   existing.rdFeedback = text; // backward compat
   existing.rdFeedbackAt = new Date().toISOString();
+  existing.rdViewed = true;  // 送出回覆即標記已讀，紅點消失
+  existing.rdViewedAt = new Date().toISOString();
   ss(`food_${studentId}_${day}`, existing);
+  document.getElementById('fb-input').value = '';
   showToast('✅ 總結回覆已送出！');
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
@@ -1688,6 +1692,8 @@ function saveMealFeedback(studentId, day, mealKey) {
   existing[mealKey + '_rdFeedbacks'] = arr;
   existing[mealKey + '_rdFeedback'] = text;
   existing[mealKey + '_rdFeedbackAt'] = new Date().toISOString();
+  existing.rdViewed = true;
+  existing.rdViewedAt = new Date().toISOString();
   ss(`food_${studentId}_${day}`, existing);
   showToast('✅ 餐別回饋已送出！');
   if (input) input.value = '';
