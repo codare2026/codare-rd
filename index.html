@@ -7,6 +7,32 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
 <script>
 // ── Supabase 設定 ──
+// ── OneSignal 推播 ──
+const OS_APP_ID = "d76da6d5-8058-40dc-acd5-cc6c5c55ec98";
+const OS_API_KEY = "os_v2_app_25w2nvmalbanzlgvzrwfyvpmtdemxnrvsvpukcemyq34xmr4gwbammw2wclrvpdobawlmkcvpkcjem2dykaflggiwzvysl77eflzura";
+
+async function sendPushToStudent(studentId, title, body) {
+  try {
+    const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
+    const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.onesignal_${studentId}&select=value`, { headers: GET_HDRS });
+    if (!res.ok) return;
+    const rows = await res.json();
+    const playerId = rows[0]?.value?.playerId;
+    if (!playerId) return;
+    await fetch('https://api.onesignal.com/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Key ${OS_API_KEY}` },
+      body: JSON.stringify({
+        app_id: OS_APP_ID,
+        include_subscription_ids: [playerId],
+        headings: { en: title, zh: title },
+        contents: { en: body, zh: body },
+        url: 'https://codare2026.github.io/codare-client/'
+      })
+    });
+  } catch(e) { console.warn('Push failed:', e.message); }
+}
+
 const SB_URL  = 'https://iqfnbwyjehwdbxptquyr.supabase.co';
 const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxZm5id3lqZWh3ZGJ4cHRxdXlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODU5MjcsImV4cCI6MjA5MjM2MTkyN30.F5XSv6TKkJfek8bLmYsgvYgD7cnLGLirpNwC7SqbNDY';
 const SB_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' };
@@ -544,6 +570,14 @@ body.sidebar-collapsed .main { margin-left: 0; }
   .more-menu { display: none !important; }
 }
 </style>
+  <!-- OneSignal Web Push -->
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      await OneSignal.init({ appId: "d76da6d5-8058-40dc-acd5-cc6c5c55ec98", notifyButton: { enable: false } });
+    });
+  </script>
 </head>
 <body>
 
@@ -830,7 +864,24 @@ async function doRdLogin() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('rd-loading-screen').style.display = 'none';
     launchRdApp();
-    // 背景同步（登入後 300ms 執行，不阻擋 UI）
+    // 儲存 RD 的 OneSignal player ID
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async (OneSignal) => {
+      try {
+        await OneSignal.Notifications.requestPermission();
+        const playerId = OneSignal.User.PushSubscription.id;
+        if (playerId) {
+          const key = 'onesignal_rd_' + id;
+          await fetch(`${SB_URL}/rest/v1/cd`, {
+            method: 'POST',
+            headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
+            body: JSON.stringify({ key, value: { playerId, rdId: id }, updated_at: new Date().toISOString() })
+          });
+        }
+      } catch(e) {}
+    });
+
+  // 背景同步（登入後 300ms 執行，不阻擋 UI）
     setTimeout(async () => {
       try {
         await warmCache(); // warmCache 內部已包含 rduser_ 和所有學員資料
@@ -1002,9 +1053,13 @@ function countPendingFeedback() {
   getActiveStudents().forEach(s => {
     buildStudentDates(s.start, s.end).forEach(d => {
       const data = gs(`food_${s.id}_${d}`);
-      // 只要學員有儲存資料且 RD 未查看就算待處理（不需要按通知）
-      if (!data || (!data.hasData && !data.notified)) return;
-      if (!data.rdViewed) count++;
+      if (!data) return;
+      // 未查看的飲食資料
+      if ((data.hasData || data.notified) && !data.rdViewed) { count++; return; }
+      // 有未讀的學員回覆
+      const replies = Array.isArray(data.studentReplies) ? data.studentReplies : [];
+      const lastReplyAt = replies.length ? replies[replies.length-1].at : null;
+      if (lastReplyAt && (!data.rdRepliesReadAt || data.rdRepliesReadAt < lastReplyAt)) count++;
     });
   });
   return count;
@@ -1307,7 +1362,10 @@ function renderFeedback() {
   const studentTabs = students.map(s => {
     const hasPending = buildStudentDates(s.start, s.end).some(d => {
       const f = gs(`food_${s.id}_${d}`);
-      return f && (f.hasData || f.notified) && !f.rdViewed;
+      if ((f?.hasData || f?.notified) && !f?.rdViewed) return true;
+      const reps = Array.isArray(f?.studentReplies) ? f.studentReplies : [];
+      const lastAt = reps.length ? reps[reps.length-1].at : null;
+      return lastAt && (!f.rdRepliesReadAt || f.rdRepliesReadAt < lastAt);
     });
     const dotStyle = 'position:absolute;top:3px;right:3px;width:9px;height:9px;background:#ef4444;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #ef4444';
     return `<button class="btn ${feedbackStudentId === s.id ? 'btn-teal' : 'btn-outline'}" style="font-size:13px;padding:7px 14px;position:relative" onclick="switchFeedbackStudent('${s.id}')">
@@ -1368,8 +1426,11 @@ function renderFeedback() {
       const isToday = d === today;
       let cls = 'day-chip';
       const hasContent = food && (food.hasData || food.notified);
+      const replies = food && Array.isArray(food.studentReplies) ? food.studentReplies : [];
+      const lastReplyAt = replies.length ? replies[replies.length-1].at : null;
+      const hasUnreadReply = lastReplyAt && (!food.rdRepliesReadAt || food.rdRepliesReadAt < lastReplyAt);
       if (d === selectedFeedbackDay) cls += ' active';
-      else if (hasContent && !food.rdViewed) cls += ' notified';
+      else if ((hasContent && !food.rdViewed) || hasUnreadReply) cls += ' notified';
       else if (hasContent) cls += ' has-data';
       return `<button class="${cls}" onclick="selectFeedbackDay('${d}')">${d}${isToday ? '▸' : ''}</button>`;
     }).join('');
@@ -1476,6 +1537,20 @@ function renderFeedback() {
         </div>`;
       })() : ''}
       ${food.lifeNote ? `<div style="margin-top:12px;padding:12px;background:var(--amber-light);border-radius:8px;font-size:13px;line-height:1.7">📝 <strong>飲食札記：</strong>${food.lifeNote}</div>` : ''}
+      ${Array.isArray(food.studentReplies) && food.studentReplies.length > 0 ? `
+        <div style="margin-top:12px;padding:12px;background:var(--teal-light);border-radius:8px;border-left:3px solid var(--teal)">
+          <div style="font-size:12px;font-weight:700;color:var(--teal-dark);margin-bottom:6px">💬 學員回覆</div>
+          ${food.studentReplies.map(r => {
+            const isUnread = !food.rdRepliesReadAt || food.rdRepliesReadAt < r.at;
+            return `<div style="font-size:13px;color:var(--g7);line-height:1.6;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.05);${isUnread ? 'background:rgba(255,100,100,0.04);margin:0 -4px;padding:8px 4px;border-radius:6px;' : ''}">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+                ${isUnread ? '<span style="width:7px;height:7px;background:#ef4444;border-radius:50%;display:inline-block;flex-shrink:0"></span>' : ''}
+                <span style="color:var(--g5);font-size:11px">${new Date(r.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+              </div>
+              ${r.text}
+            </div>`;
+          }).join('')}
+        </div>` : ''}
 
       <div class="divider"></div>
       <div style="font-size:14px;font-weight:700;color:var(--g7);margin-bottom:4px">📝 整日總結回饋</div>
@@ -1626,15 +1701,23 @@ function pushInbox(studentId, msg) {
   ss(key, arr);
 }
 
-// 標記 RD 已查看並清除紅點
+// 標記 RD 已查看並清除紅點（含學員回覆）
 function markRdViewed(studentId, day) {
   const key = `food_${studentId}_${day}`;
   const existing = gs(key);
-  if (existing && !existing.rdViewed) {
-    existing.rdViewed = true;
-    existing.rdViewedAt = new Date().toISOString();
-    ss(key, existing);
+  if (!existing) return;
+  let changed = false;
+  if (!existing.rdViewed) { existing.rdViewed = true; existing.rdViewedAt = new Date().toISOString(); changed = true; }
+  // 標記學員回覆已讀
+  const replies = Array.isArray(existing.studentReplies) ? existing.studentReplies : [];
+  if (replies.length) {
+    const lastAt = replies[replies.length-1].at;
+    if (!existing.rdRepliesReadAt || existing.rdRepliesReadAt < lastAt) {
+      existing.rdRepliesReadAt = new Date().toISOString();
+      changed = true;
+    }
   }
+  if (changed) ss(key, existing);
 }
 
 function saveFeedback(studentId, day) {
@@ -1654,6 +1737,9 @@ function saveFeedback(studentId, day) {
   showToast('✅ 總結回覆已送出！');
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
+  // 推播通知學員
+  const stuName = getActiveStudents().find(s => s.id === studentId)?.name || '學員';
+  sendPushToStudent(studentId, `💬 營養師回覆了你的飲食日記`, `${currentRD.name} 已回覆你 ${day} 的飲食紀錄，快去看看！`);
 }
 
 function startEditOverallFb(idx, text) {
