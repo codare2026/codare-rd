@@ -1869,8 +1869,10 @@ const DEFAULT_TEMPLATES = [
 
 function getRdTemplates() {
   const rdId = currentRD?.id || 'default';
-  const custom = gs(`rd_templates_${rdId}`) || [];
-  return [...DEFAULT_TEMPLATES, ...custom];
+  const custom = gs('rd_templates_' + rdId) || [];
+  const deleted = gs('rd_templates_deleted_' + rdId) || [];
+  const defaults = DEFAULT_TEMPLATES.filter((_, i) => !deleted.includes(i));
+  return [...defaults, ...custom];
 }
 
 function insertSelectedTemplate(sel) {
@@ -1892,12 +1894,66 @@ function insertSelectedTemplate(sel) {
 function renderExistingTemplates() {
   const rdId = currentRD?.id || 'default';
   const custom = gs('rd_templates_' + rdId) || [];
-  if (!custom.length) return '<div style="font-size:12px;color:var(--g4)">尚無自訂語句</div>';
-  return '<div style="font-size:12px;font-weight:700;color:var(--g5);margin-bottom:6px">已有自訂語句：</div>' +
-    custom.map((t, i) => '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--g1)">' +
-      '<span style="flex:1;font-size:13px">' + t + '</span>' +
-      '<button onclick="deleteCustomTemplate(' + i + ')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;padding:0;line-height:1">×</button>' +
-    '</div>').join('');
+  // 預設語句也可編輯/刪除
+  const deleted = gs('rd_templates_deleted_' + rdId) || [];
+  const defaultItems = DEFAULT_TEMPLATES
+    .map((t, i) => ({ t, i, isDefault: true }))
+    .filter(x => !deleted.includes(x.i));
+  const defaultHTML = defaultItems.length
+    ? '<div style="font-size:11px;font-weight:700;color:var(--g4);margin-bottom:4px;margin-top:8px">預設語句</div>' +
+      defaultItems.map(({ t, i }) =>
+        '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--g1)">' +
+          '<span style="flex:1;font-size:13px;color:var(--g6)">' + t + '</span>' +
+          '<button onclick="editDefaultTemplate(' + i + ')" style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:11px;padding:2px 6px;font-family:inherit">編輯</button>' +
+          '<button onclick="deleteDefaultTemplate(' + i + ')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;padding:0 2px;line-height:1">×</button>' +
+        '</div>'
+      ).join('') : '';
+  const customHTML = custom.length
+    ? '<div style="font-size:11px;font-weight:700;color:var(--g4);margin-bottom:4px;margin-top:8px">自訂語句</div>' +
+      custom.map((t, i) =>
+        '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--g1)">' +
+          '<span style="flex:1;font-size:13px">' + t + '</span>' +
+          '<button onclick="editCustomTemplate(' + i + ')" style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:11px;padding:2px 6px;font-family:inherit">編輯</button>' +
+          '<button onclick="deleteCustomTemplate(' + i + ')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:18px;padding:0 2px;line-height:1">×</button>' +
+        '</div>'
+      ).join('') : '';
+  if (!defaultItems.length && !custom.length) return '<div style="font-size:12px;color:var(--g4)">尚無語句</div>';
+  return defaultHTML + customHTML;
+}
+
+function deleteDefaultTemplate(idx) {
+  const rdId = currentRD?.id || 'default';
+  const deleted = gs('rd_templates_deleted_' + rdId) || [];
+  if (!deleted.includes(idx)) { deleted.push(idx); ss('rd_templates_deleted_' + rdId, deleted); }
+  closeModal(); showToast('🗑️ 已刪除');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function editDefaultTemplate(idx) {
+  const text = DEFAULT_TEMPLATES[idx];
+  const newText = window.prompt('編輯語句', text);
+  if (!newText || !newText.trim()) return;
+  const rdId = currentRD?.id || 'default';
+  // 刪除原本的，加入自訂
+  const deleted = gs('rd_templates_deleted_' + rdId) || [];
+  if (!deleted.includes(idx)) { deleted.push(idx); ss('rd_templates_deleted_' + rdId, deleted); }
+  const custom = gs('rd_templates_' + rdId) || [];
+  custom.push(newText.trim());
+  ss('rd_templates_' + rdId, custom);
+  closeModal(); showToast('✅ 已更新');
+  document.getElementById('main-content').innerHTML = renderFeedback();
+}
+
+function editCustomTemplate(idx) {
+  const rdId = currentRD?.id || 'default';
+  const custom = gs('rd_templates_' + rdId) || [];
+  const text = custom[idx];
+  const newText = window.prompt('編輯語句', text);
+  if (!newText || !newText.trim()) return;
+  custom[idx] = newText.trim();
+  ss('rd_templates_' + rdId, custom);
+  closeModal(); showToast('✅ 已更新');
+  document.getElementById('main-content').innerHTML = renderFeedback();
 }
 
 function openAddTemplateModal() {
@@ -3206,7 +3262,7 @@ function renderWeekplan() {
         return m ? m[1] : '0';
       };
       const cats = ['C','P','V','F','D','O'];
-      const opts = [0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8];
+      const opts = [0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,5.5,6,6.5,7,7.5,8,9,10,11,12,13,14,15,16,17,18,19,20];
       const selects = cats.map(cat => {
         const val = parseVal(saved, cat);
         const options = opts.map(o => `<option value="${o}" ${parseFloat(val)===o?'selected':''}>${o}</option>`).join('');
@@ -3452,16 +3508,16 @@ function renderMenuMgr() {
             <div style="display:flex;gap:4px;flex-wrap:wrap" id="m-${p}-${di}-cpv-wrap">
               ${(() => {
                 const saved = getDay(p,di,'cpvfdo') || '';
-                const parseVal = (str, letter) => { const m = str.match(new RegExp(letter + '\\s*([\\d.]+)')); return m ? m[1] : '0'; };
+                const parseVal = (str, letter) => { const m = str.match(new RegExp(letter + '\\s*([\\d.]+)')); return m ? m[1] : ''; };
                 const cats = [['C','全穀'],['P','豆魚蛋肉'],['V','蔬菜'],['F','水果'],['D','乳品'],['O','油脂']];
-                const opts = [0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8];
                 return cats.map(([cat, label]) => {
                   const val = parseVal(saved, cat);
-                  const options = opts.map(o => `<option value="${o}" ${parseFloat(val)===o?'selected':''}>${o}</option>`).join('');
-                  return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:44px">
+                  return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:40px">
                     <div style="font-size:9px;font-weight:700;color:var(--teal)">${cat}</div>
-                    <div style="font-size:8px;color:var(--g4);line-height:1">${label}</div>
-                    <select id="m-${p}-${di}-cpv-${cat.toLowerCase()}" style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:4px 1px;font-size:12px;font-family:inherit;outline:none;text-align:center;background:#fff">${options}</select>
+                    <div style="font-size:8px;color:var(--g4);line-height:1;text-align:center">${label}</div>
+                    <input type="number" id="m-${p}-${di}-cpv-${cat.toLowerCase()}" value="${val}" min="0" max="30" step="0.5" placeholder="0"
+                      style="width:100%;border:1.5px solid var(--g2);border-radius:6px;padding:5px 2px;font-size:13px;font-family:inherit;outline:none;text-align:center;background:#fff"
+                      onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'">
                   </div>`;
                 }).join('');
               })()}
@@ -3525,9 +3581,8 @@ function copyPrevDay(p, di) {
     const dst = document.getElementById(to);
     if (src && dst) dst.value = src.value;
   });
-  // 複製份數分配下拉選單
-  const cats = ['c','p','v','f','d','o'];
-  cats.forEach(cat => {
+  // 複製份數分配（input）
+  ['c','p','v','f','d','o'].forEach(cat => {
     const src = document.getElementById(`m-${p}-${di-1}-cpv-${cat}`);
     const dst = document.getElementById(`m-${p}-${di}-cpv-${cat}`);
     if (src && dst) dst.value = src.value;
