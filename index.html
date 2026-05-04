@@ -1224,7 +1224,7 @@ function renderDashboard() {
     const bodyNotif = gs(`body_notif_${s.id}`);
     const hasBodyNotif = bodyNotif && bodyNotif.notified && !bodyNotif.rdSeen;
     const sDates = buildStudentDates(s.start, s.end);
-    const doneDays = sDates.filter(date => { const f = gs(`food_${s.id}_${date}`); return f && f.notified; }).length;
+    const doneDays = sDates.filter(date => { const f = gs(`food_${s.id}_${date}`); return f && (f.hasData || f.notified); }).length;
     const pct = sDates.length ? Math.round(doneDays / sDates.length * 100) : 0;
     return `<div class="student-row" onclick="openFeedbackForStudent('${s.id}','${today}')" style="padding:12px 0;border-bottom:1px solid var(--g1);align-items:flex-start">
       <div class="student-avatar" style="position:relative;flex-shrink:0">
@@ -1294,7 +1294,7 @@ function renderDashboard() {
       <div class="card-title">🗓️ 課程完成率</div>
       ${students.map(s => {
         const sDates = buildStudentDates(s.start, s.end);
-        const done = sDates.filter(d => { const f = gs(`food_${s.id}_${d}`); return f && f.notified; }).length;
+        const done = sDates.filter(d => { const f = gs(`food_${s.id}_${d}`); return f && (f.hasData || f.notified); }).length;
         const total = sDates.length;
         const pct = total ? Math.round(done/total*100) : 0;
         return `<div style="margin-bottom:12px">
@@ -4237,7 +4237,7 @@ async function generateAIReport(studentId) {
 
   // ── 飲食分析 ──
   const foodDays = sDates.map(d => gs(`food_${s.id}_${d}`)).filter(Boolean);
-  const uploadedDays = foodDays.filter(f => f.notified).length;
+  const uploadedDays = foodDays.filter(f => f && (f.hasData || f.notified)).length;
   const uploadRate = totalDays ? Math.round(uploadedDays / totalDays * 100) : 0;
 
   // 飲食類型統計
