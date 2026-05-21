@@ -3744,9 +3744,13 @@ function renderMaterials() {
         <div id="ency-desc-wrap">
           <input type="text" id="ency-desc-text" placeholder="請先選擇教材分類" disabled
             style="width:100%;padding:9px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:var(--g1);color:var(--g4)">
-          <select id="ency-desc-select" style="display:none;width:100%;padding:9px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff">
+          <select id="ency-desc-select" style="display:none;width:100%;padding:9px 12px;border:1.5px solid var(--g2);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff" onchange="const cb=document.getElementById('ency-custom-title-box');if(cb)cb.style.display=this.value==='course_custom'?'':'none'">
             <option value="">請選擇...</option>
           </select>
+          <div id="ency-custom-title-box" style="display:none;margin-top:8px">
+            <input type="text" id="ency-custom-title" placeholder="例：線上課程 5｜蔬菜水果類"
+              style="width:100%;padding:9px 12px;border:1.5px solid var(--teal);border-radius:8px;font-size:13px;font-family:inherit;outline:none;background:#fff">
+          </div>
         </div>
       </div>
     </div>
@@ -3797,16 +3801,11 @@ let pendingEncyFile = null;
 let encyTabMode = 'file'; // 'file' | 'link'
 
 const ENCY_COURSE_OPTIONS = [
-  { val: 'course_1',  label: '線上課程 1｜認識熱量與熱量赤字' },
-  { val: 'course_2',  label: '線上課程 2｜健檢報告解密' },
-  { val: 'course_3',  label: '線上課程 3｜豆魚蛋肉類' },
-  { val: 'course_4',  label: '線上課程 4｜全穀雜糧類' },
-  { val: 'course_5',  label: '線上課程 5｜蔬菜水果類' },
-  { val: 'course_6',  label: '線上課程 6｜油脂類' },
-  { val: 'course_7',  label: '線上課程 7｜運動營養' },
-  { val: 'course_8',  label: '線上課程 8｜外食技巧交戰守則' },
-  { val: 'course_9',  label: '線上課程 9｜看懂營養標示／嘴饞點心不用怕' },
-  { val: 'course_10', label: '線上課程 10｜保健品全攻略' }
+  { val: 'course_1', label: '線上課程 1｜認識熱量與熱量赤字' },
+  { val: 'course_2', label: '線上課程 2｜健檢報告解密' },
+  { val: 'course_3', label: '線上課程 3｜豆魚蛋肉類' },
+  { val: 'course_4', label: '線上課程 4｜全穀雜糧類' },
+  { val: 'course_custom', label: '✏️ 自訂課程標題…' }
 ];
 
 const ENCY_FOOD_OPTIONS = [
@@ -3837,6 +3836,14 @@ function onEncyCategoryChange() {
   if (cat === '線上教學影片') {
     label.textContent = '對應課程章節 *';
     options = ENCY_COURSE_OPTIONS;
+    // Show custom title input (hidden by default)
+    setTimeout(() => {
+      const sel = document.getElementById('ency-desc-select');
+      if (sel) sel.onchange = function() {
+        const customBox = document.getElementById('ency-custom-title-box');
+        if (customBox) customBox.style.display = this.value === 'course_custom' ? '' : 'none';
+      };
+    }, 50);
   } else if (cat === '六大類食物份數估算寶典') {
     label.textContent = '食物類別 *';
     options = ENCY_FOOD_OPTIONS;
@@ -3848,6 +3855,13 @@ function onEncyCategoryChange() {
 
 function getEncyDesc() {
   const selectInput = document.getElementById('ency-desc-select');
+  // 自訂課程標題
+  if (selectInput?.value === 'course_custom') {
+    const customTitle = document.getElementById('ency-custom-title')?.value?.trim();
+    if (!customTitle) { showToast('請輸入自訂課程標題'); return null; }
+    // 自動產生 course_custom_{timestamp} 作為 val
+    return { val: 'course_custom_' + Date.now(), label: customTitle };
+  }
   const textInput = document.getElementById('ency-desc-text');
   if (selectInput && selectInput.style.display !== 'none') return selectInput.value;
   return textInput?.value?.trim() || '';
