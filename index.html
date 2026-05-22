@@ -3663,7 +3663,7 @@ function deleteMenu(studentId, period) {
 // ══════════════════════════════════════
 let matStudentId = null;
 
-function renderMaterials() {
+async function renderMaterials() {
   const students = getActiveStudents();
   if (!matStudentId) matStudentId = students[0]?.id || null;
   const s = students.find(x => x.id === matStudentId);
@@ -3675,7 +3675,7 @@ function renderMaterials() {
 
   const now = Date.now();
   const ONE_YEAR = 365 * 24 * 60 * 60 * 1000;
-  const rawItems = gs(`ency_${s.id}`) || [];
+  let rawItems = []; try {   const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };   const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.ency_${encodeURIComponent(s.id)}&select=value`, { headers: GET_HDRS });   if (res.ok) {     const rows = await res.json();     if (rows[0]?.value) rawItems = rows[0].value;   } } catch(e) {   rawItems = gs(`ency_${s.id}`) || []; }
 
   // Mark expired items and flag them
   const encyItems = rawItems.map(item => ({
