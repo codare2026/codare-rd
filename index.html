@@ -1180,8 +1180,8 @@ function showSection(sec) {
     report: renderReport
   };
   // Use setTimeout to let spinner paint first
-  setTimeout(() => {
-    el.innerHTML = (renders[sec] || renderDashboard)();
+  setTimeout(async () => {
+    el.innerHTML = await (renders[sec] || renderDashboard)();
     updateBadge();
     window.scrollTo(0, 0);
     // 週計畫頁面：渲染後立即計算整天合計
