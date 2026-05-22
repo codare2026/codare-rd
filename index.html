@@ -3907,7 +3907,7 @@ function compressImage(file) {
     reader.onload = e => {
       const img = new Image();
       img.onload = () => {
-        const MAX = 1200;
+        const MAX = 800;
         let { width: w, height: h } = img;
         if (w > MAX || h > MAX) {
           if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -3916,7 +3916,7 @@ function compressImage(file) {
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL('image/jpeg', 0.75);
+        const compressed = canvas.toDataURL('image/jpeg', 0.4);
         const origKB = Math.round(file.size / 1024);
         const newKB  = Math.round(compressed.length * 0.75 / 1024);
         resolve({ name: file.name, type: 'image/jpeg', data: compressed, sizeMB: (newKB/1024).toFixed(1), origKB, newKB });
