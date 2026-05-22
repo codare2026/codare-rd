@@ -9,9 +9,8 @@
 // ── Supabase 設定 ──
 // ── OneSignal 推播 ──
 const OS_APP_ID = "d76da6d5-8058-40dc-acd5-cc6c5c55ec98";
-const OS_API_KEY = "os_v2_app_25w2nvmalbanzlgvzrwfyvpmtdemxnrvsvpukcemyq34xmr4gwbammw2wclrvpdobawlmkcvpkcjem2dykaflggiwzvysl77eflzura";
 
-async function sendPushToStudent(studentId, title, body) {
+async function sendPushToStudent(studentId, title, body) {   console.warn('OneSignal 推播目前暫停，只保留站內通知');   return false; }
   try {
     const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
     const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.onesignal_${studentId}&select=value`, { headers: GET_HDRS });
