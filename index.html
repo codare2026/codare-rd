@@ -9,8 +9,9 @@
 // ── Supabase 設定 ──
 // ── OneSignal 推播 ──
 const OS_APP_ID = "d76da6d5-8058-40dc-acd5-cc6c5c55ec98";
+const OS_API_KEY = "os_v2_app_25w2nvmalbanzlgvzrwfyvpmtdemxnrvsvpukcemyq34xmr4gwbammw2wclrvpdobawlmkcvpkcjem2dykaflggiwzvysl77eflzura";
 
-async function sendPushToStudent(studentId, title, body) {   console.warn('OneSignal 推播目前暫停，只保留站內通知');   return false; }
+async function sendPushToStudent(studentId, title, body) {
   try {
     const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
     const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.onesignal_${studentId}&select=value`, { headers: GET_HDRS });
@@ -82,31 +83,16 @@ async function uploadToStorage(dataUrl, fileName, folder) {
 // ── Supabase 寫入（使用 upsert 確保跨裝置同步） ──
 async function sbWrite(key, val) {
   try {
-    let res;
-
     if (val === null) {
-      res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}`, {
-        method: 'DELETE',
-        headers: SB_HDRS
-      });
+      await fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}`, { method: 'DELETE', headers: SB_HDRS });
     } else {
-      res = await fetch(`${SB_URL}/rest/v1/cd`, {
+      await fetch(`${SB_URL}/rest/v1/cd`, {
         method: 'POST',
         headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify({ key, value: val, updated_at: new Date().toISOString() })
       });
     }
-
-    if (!res.ok) {
-      const msg = await res.text().catch(() => '');
-      throw new Error(`Supabase write failed: ${res.status} ${msg}`);
-    }
-
-    return true;
-  } catch(e) {
-    console.warn('Supabase write error:', e.message);
-    throw e;
-  }
+  } catch(e) { console.warn('Supabase write error:', e.message); }
 }
 
 // ── 從 localStorage 預載 cache（瞬間啟動） ──
@@ -906,7 +892,7 @@ async function doRdLogin() {
           const renders = { dashboard: renderDashboard, feedback: renderFeedback,
             students: renderStudentsPage, weekplan: renderWeekplan,
             menu: renderMenuMgr, materials: renderMaterials };
-          if (renders[currentSection]) el.innerHTML = await renders[currentSection]();
+          if (renders[currentSection]) el.innerHTML = renders[currentSection]();
         }
       } catch(e) { console.warn('bg sync failed:', e.message); }
     }, 300);
@@ -984,7 +970,7 @@ function doRdLogout() {
               if (el && currentSection) {
                 const r = { dashboard: renderDashboard, feedback: renderFeedback,
                   students: renderStudentsPage, menu: renderMenuMgr, materials: renderMaterials };
-                if (r[currentSection]) el.innerHTML = await r[currentSection]();
+                if (r[currentSection]) el.innerHTML = r[currentSection]();
               }
             } catch(e) { console.warn('auto bg sync failed:', e.message); }
           }, 300);
@@ -1136,15 +1122,13 @@ async function syncRdData() {
     await warmCache(); // Full sync when user explicitly requests
     hideLoading();
     showToast('✅ 資料已同步！');
-    const renderFn = (
-  { dashboard: renderDashboard, feedback: renderFeedback,
-    students: renderStudentsPage, weekplan: renderWeekplan,
-    bodytrack: renderBodyTrack, menu: renderMenuMgr,
-    materials: renderMaterials, accounts: renderAccounts,
-    report: renderReport }[currentSection] || renderDashboard
-);
-
-document.getElementById('main-content').innerHTML = await renderFn();
+    document.getElementById('main-content').innerHTML = (
+      { dashboard: renderDashboard, feedback: renderFeedback,
+        students: renderStudentsPage, weekplan: renderWeekplan,
+        bodytrack: renderBodyTrack, menu: renderMenuMgr,
+        materials: renderMaterials, accounts: renderAccounts,
+        report: renderReport }[currentSection] || renderDashboard
+    )();
     updateBadge();
   } catch(e) {
     hideLoading();
@@ -1196,8 +1180,8 @@ function showSection(sec) {
     report: renderReport
   };
   // Use setTimeout to let spinner paint first
-  setTimeout(async () => {
-    el.innerHTML = await (renders[sec] || renderDashboard)();
+  setTimeout(() => {
+    el.innerHTML = (renders[sec] || renderDashboard)();
     updateBadge();
     window.scrollTo(0, 0);
     // 週計畫頁面：渲染後立即計算整天合計
@@ -1644,14 +1628,7 @@ function renderFeedback() {
     </div>
   </div>
 
-  <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-  <button class="btn btn-outline btn-sm"
-    onclick="exportDailyDiary('${feedbackStudentId}','${selectedFeedbackDay}')"
-    title="匯出為圖片，可直接丟給 AI 估算份量">
-    📸 匯出當日紀錄
-  </button>
-</div>
-<div class="card">${contentHTML}</div>`;
+  <div class="card">${contentHTML}</div>`;
 }
 
 function switchFeedbackStudent(id) {
@@ -3679,7 +3656,7 @@ function deleteMenu(studentId, period) {
 // ══════════════════════════════════════
 let matStudentId = null;
 
-async function renderMaterials() {
+function renderMaterials() {
   const students = getActiveStudents();
   if (!matStudentId) matStudentId = students[0]?.id || null;
   const s = students.find(x => x.id === matStudentId);
@@ -3691,7 +3668,7 @@ async function renderMaterials() {
 
   const now = Date.now();
   const ONE_YEAR = 365 * 24 * 60 * 60 * 1000;
-  let rawItems = gs(`ency_${s.id}`) || [];  try {   const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };   const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.ency_${encodeURIComponent(s.id)}&select=value`, { headers: GET_HDRS });    if (res.ok) {     const rows = await res.json();     if (rows[0]?.value) {       rawItems = rows[0].value;       _cache[`ency_${s.id}`] = rawItems;       try {         localStorage.setItem('cd_ency_' + s.id, JSON.stringify(rawItems));       } catch {}     }   } } catch(e) {   rawItems = gs(`ency_${s.id}`) || []; }
+  const rawItems = gs(`ency_${s.id}`) || [];
 
   // Mark expired items and flag them
   const encyItems = rawItems.map(item => ({
@@ -3920,70 +3897,26 @@ function handleEncyDrop(event) {
 function compressImage(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
-
     reader.onload = e => {
       const img = new Image();
-
       img.onload = () => {
-        const MAX = 1600;
-        const TARGET_KB = 500;
-        const MAX_KB = 650;
-
+        const MAX = 1200;
         let { width: w, height: h } = img;
-
         if (w > MAX || h > MAX) {
-          if (w > h) {
-            h = Math.round(h * MAX / w);
-            w = MAX;
-          } else {
-            w = Math.round(w * MAX / h);
-            h = MAX;
-          }
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else       { w = Math.round(w * MAX / h); h = MAX; }
         }
-
         const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, w, h);
-
-        let quality = 0.92;
-        let compressed = canvas.toDataURL('image/jpeg', quality);
-        let newKB = Math.round(compressed.length * 0.75 / 1024);
-
-        while (newKB > MAX_KB && quality > 0.72) {
-          quality -= 0.05;
-          compressed = canvas.toDataURL('image/jpeg', quality);
-          newKB = Math.round(compressed.length * 0.75 / 1024);
-        }
-
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL('image/jpeg', 0.75);
         const origKB = Math.round(file.size / 1024);
-
-        resolve({
-          name: file.name.replace(/\.[^.]+$/, '') + '.jpg',
-          type: 'image/jpeg',
-          data: compressed,
-          sizeMB: (newKB / 1024).toFixed(1),
-          origKB,
-          newKB
-        });
+        const newKB  = Math.round(compressed.length * 0.75 / 1024);
+        resolve({ name: file.name, type: 'image/jpeg', data: compressed, sizeMB: (newKB/1024).toFixed(1), origKB, newKB });
       };
-
-      img.onerror = () => resolve({
-        name: file.name,
-        type: file.type,
-        data: e.target.result,
-        sizeMB: (file.size / 1024 / 1024).toFixed(1),
-        origKB: Math.round(file.size / 1024),
-        newKB: Math.round(file.size / 1024)
-      });
-
+      img.onerror = () => resolve({ name: file.name, type: file.type, data: e.target.result, sizeMB: (file.size/1024/1024).toFixed(1) });
       img.src = e.target.result;
     };
-
     reader.onerror = () => resolve(null);
     reader.readAsDataURL(file);
   });
@@ -4039,13 +3972,8 @@ function previewEncy(idx, studentId) {
   }
 }
 
-async function switchMatStudent(id) {
-  matStudentId = id;
-  pendingEncyFile = null;
-  pendingEncyFiles = [];
-  encyTabMode = 'file';
-  document.getElementById('main-content').innerHTML = await renderMaterials();
-}
+function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendingEncyFiles = []; encyTabMode = 'file'; document.getElementById('main-content').innerHTML = renderMaterials(); }
+
 async function addEncy(studentId) {
   const title = document.getElementById('ency-title')?.value?.trim();
   const desc = getEncyDesc();   // selected option value = catKey or course_N
@@ -4110,42 +4038,28 @@ async function addEncy(studentId) {
       });
     }
 
-    _cache[`ency_${studentId}`] = existingItems; try {   localStorage.setItem('cd_ency_' + studentId, JSON.stringify(existingItems)); } catch {} await sbWrite(`ency_${studentId}`, existingItems);
+    ss(`ency_${studentId}`, existingItems);
     const count = pendingEncyFiles.length || 1;
     pendingEncyFile = null;
     pendingEncyFiles = [];
     showToast(`✅ 已新增 ${count} 份教材！`);
-    document.getElementById('main-content').innerHTML = await renderMaterials();
+    document.getElementById('main-content').innerHTML = renderMaterials();
     // Show notify dialog
     showNotifyDialog(
       studentId, 'materials', '教材上傳',
       () => NOTIFY_DEFAULTS.materials()
     );
   } catch(e) {
-  hideLoading();
-  console.warn('addEncy failed:', e);
-  showToast('⚠️ 儲存失敗，請稍後再試或改用「貼上連結」方式');
-}
-}
-
-async function deleteEncy(studentId, idx) {
-  try {
-    const items = gs(`ency_${studentId}`) || [];
-    items.splice(idx, 1);
-
-    _cache[`ency_${studentId}`] = items;
-    try {
-      localStorage.setItem('cd_ency_' + studentId, JSON.stringify(items));
-    } catch {}
-
-    await sbWrite(`ency_${studentId}`, items);
-
-    showToast('🗑️ 已刪除');
-    document.getElementById('main-content').innerHTML = await renderMaterials();
-  } catch(e) {
-    console.warn('deleteEncy failed:', e);
-    showToast('⚠️ 刪除失敗，請稍後再試');
+    showToast('⚠️ 儲存空間不足，建議改用「貼上連結」方式上傳大型檔案');
   }
+}
+
+function deleteEncy(studentId, idx) {
+  const items = gs(`ency_${studentId}`) || [];
+  items.splice(idx, 1);
+  ss(`ency_${studentId}`, items);
+  showToast('🗑️ 已刪除');
+  document.getElementById('main-content').innerHTML = renderMaterials();
 }
 
 // ══════════════════════════════════════
@@ -4687,142 +4601,6 @@ function showModal(title, bodyHTML, buttons = []) {
     </div>`;
 }
 function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
-  function loadHtml2Canvas() {
-  return new Promise((resolve, reject) => {
-    if (window.html2canvas) { resolve(); return; }
-    const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-
-async function exportDailyDiary(studentId, day) {
-  const food = gs(`food_${studentId}_${day}`);
-  if (!food || (!food.breakfast && !food.lunch && !food.dinner && !food.notified)) {
-    showToast('⚠️ 此日尚無飲食紀錄可匯出');
-    return;
-  }
-  const s = getActiveStudents().find(x => x.id === studentId) ||
-            STUDENTS_DB[studentId] || gs(`dynuser_${studentId}`) || {};
-  showLoading('📸 產生圖片中，請稍候…');
-  try {
-    await loadHtml2Canvas();
-    const el = buildExportDOM(s, day, food);
-    document.body.appendChild(el);
-    await new Promise(r => setTimeout(r, 200));
-    const canvas = await html2canvas(el, {
-      scale: 1.8,
-      useCORS: true,
-      allowTaint: false,
-      backgroundColor: '#f8fafc',
-      logging: false,
-      imageTimeout: 8000,
-    });
-    document.body.removeChild(el);
-    hideLoading();
-    const link = document.createElement('a');
-    const dateStr = day.replace('/', '-');
-    link.download = `${s.name || studentId}_${dateStr}_飲食紀錄.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-    showToast('✅ 圖片已下載，可直接丟給 AI 分析！');
-  } catch (e) {
-    document.querySelectorAll('#export-tmp-dom').forEach(n => document.body.removeChild(n));
-    hideLoading();
-    showToast('⚠️ 匯出失敗，請再試一次');
-  }
-}
-
-function buildExportDOM(s, day, food) {
-  const meals = [
-    { key: 'breakfast', label: '☀️ 早餐' },
-    { key: 'snack1',    label: '🍪 上午點心' },
-    { key: 'lunch',     label: '🌤️ 午餐' },
-    { key: 'snack2',    label: '🌙 下午點心' },
-    { key: 'dinner',    label: '🌙 晚餐' },
-    { key: 'latenight', label: '🦉 宵夜' },
-  ];
-  const moodEmoji = (score) => {
-    if (!score && score !== 0) return '';
-    const n = Number(score);
-    if (n <= 3) return `😔 ${n}分`;
-    if (n <= 6) return `😐 ${n}分`;
-    return `😊 ${n}分`;
-  };
-  const mealBlocksHTML = meals.map(m => {
-    const text = food[m.key] || '';
-    const imgs = food[m.key + '_imgs'] || [];
-    if (!text && !imgs.length) return '';
-    const imgsHTML = imgs.length
-      ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${imgs.map(src =>
-          `<img src="${src}" crossorigin="anonymous"
-            style="width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;"
-            onerror="this.style.display='none'">`).join('')}</div>`
-      : '';
-    const textHTML = text
-      ? `<div style="font-size:13px;color:#334155;line-height:1.7;margin-top:6px;white-space:pre-wrap">${text}</div>`
-      : '';
-    return `
-      <div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;">
-        <div style="display:inline-block;background:#f1f5f9;color:#475569;font-size:11px;font-weight:700;
-          padding:3px 10px;border-radius:20px;margin-bottom:4px;">${m.label}</div>
-        ${imgsHTML}${textHTML}
-      </div>`;
-  }).filter(Boolean).join('');
-
-  const lifeItems = [
-    food.exType ? `🏃 運動：${food.exType}${food.exMin ? ' ' + food.exMin + '分' : ''}` : null,
-    food.water  ? `💧 飲水：${food.water}ml` : null,
-    food.sleep  ? `😴 睡眠：${food.sleep}小時` : null,
-    food.poop   ? `🚽 排便：${food.poop}次` : null,
-    (food.moodScore !== undefined && food.moodScore !== null) ? `心情：${moodEmoji(food.moodScore)}` : null,
-  ].filter(Boolean);
-
-  const lifeHTML = lifeItems.length
-    ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">${lifeItems.map(t =>
-        `<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:20px;
-          padding:4px 12px;font-size:12px;color:#475569;">${t}</span>`).join('')}</div>`
-    : '';
-
-  const noteHTML = food.lifeNote
-    ? `<div style="background:#fef3c7;border-radius:8px;padding:10px 12px;
-        font-size:12px;color:#92400e;line-height:1.6;margin-bottom:12px;">
-        📝 <strong>飲食札記：</strong>${food.lifeNote}</div>`
-    : '';
-
-  const wrap = document.createElement('div');
-  wrap.id = 'export-tmp-dom';
-  wrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:560px;background:#f8fafc;font-family:Noto Sans TC,sans-serif;padding:0;';
-  wrap.innerHTML = `
-    <div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,0.08);">
-      <div style="background:#0d9488;padding:16px 20px;color:#fff;">
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-          <div>
-            <div style="font-size:10px;opacity:0.8;letter-spacing:1px;margin-bottom:3px;">🦁 Co-Dare 飲食紀錄</div>
-            <div style="font-size:20px;font-weight:900;">${s.name || '學員'}</div>
-          </div>
-          <div style="text-align:right;">
-            <div style="font-size:22px;font-weight:900;">${day}</div>
-            <div style="font-size:10px;opacity:0.75;margin-top:2px;">${new Date().getFullYear()}年</div>
-          </div>
-        </div>
-        ${s.goal ? `<div style="margin-top:8px;font-size:11px;opacity:0.85;background:rgba(255,255,255,0.15);
-          border-radius:6px;padding:4px 10px;display:inline-block;">🎯 ${s.goal}</div>` : ''}
-      </div>
-      <div style="padding:18px 20px;">
-        ${lifeHTML}${noteHTML}
-        ${mealBlocksHTML || `<div style="text-align:center;color:#94a3b8;font-size:13px;padding:24px 0;">（本日無詳細餐次紀錄）</div>`}
-        <div style="margin-top:8px;padding-top:12px;border-top:1px solid #e2e8f0;
-          display:flex;align-items:center;justify-content:space-between;">
-          <div style="font-size:10px;color:#94a3b8;">由 Co-Dare 營養師後台匯出</div>
-          <div style="font-size:10px;color:#94a3b8;">${new Date().toLocaleDateString('zh-TW')}</div>
-        </div>
-      </div>
-    </div>`;
-  return wrap;
-}
 </script>
 </body>
 </html>
