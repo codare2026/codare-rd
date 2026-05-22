@@ -1628,7 +1628,14 @@ function renderFeedback() {
     </div>
   </div>
 
-  <div class="card">${contentHTML}</div>`;
+  <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+  <button class="btn btn-outline btn-sm"
+    onclick="exportDailyDiary('${feedbackStudentId}','${selectedFeedbackDay}')"
+    title="匯出為圖片，可直接丟給 AI 估算份量">
+    📸 匯出當日紀錄
+  </button>
+</div>
+<div class="card">${contentHTML}</div>`;
 }
 
 function switchFeedbackStudent(id) {
@@ -4601,6 +4608,142 @@ function showModal(title, bodyHTML, buttons = []) {
     </div>`;
 }
 function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
+  function loadHtml2Canvas() {
+  return new Promise((resolve, reject) => {
+    if (window.html2canvas) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function exportDailyDiary(studentId, day) {
+  const food = gs(`food_${studentId}_${day}`);
+  if (!food || (!food.breakfast && !food.lunch && !food.dinner && !food.notified)) {
+    showToast('⚠️ 此日尚無飲食紀錄可匯出');
+    return;
+  }
+  const s = getActiveStudents().find(x => x.id === studentId) ||
+            STUDENTS_DB[studentId] || gs(`dynuser_${studentId}`) || {};
+  showLoading('📸 產生圖片中，請稍候…');
+  try {
+    await loadHtml2Canvas();
+    const el = buildExportDOM(s, day, food);
+    document.body.appendChild(el);
+    await new Promise(r => setTimeout(r, 200));
+    const canvas = await html2canvas(el, {
+      scale: 1.8,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: '#f8fafc',
+      logging: false,
+      imageTimeout: 8000,
+    });
+    document.body.removeChild(el);
+    hideLoading();
+    const link = document.createElement('a');
+    const dateStr = day.replace('/', '-');
+    link.download = `${s.name || studentId}_${dateStr}_飲食紀錄.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    showToast('✅ 圖片已下載，可直接丟給 AI 分析！');
+  } catch (e) {
+    document.querySelectorAll('#export-tmp-dom').forEach(n => document.body.removeChild(n));
+    hideLoading();
+    showToast('⚠️ 匯出失敗，請再試一次');
+  }
+}
+
+function buildExportDOM(s, day, food) {
+  const meals = [
+    { key: 'breakfast', label: '☀️ 早餐' },
+    { key: 'snack1',    label: '🍪 上午點心' },
+    { key: 'lunch',     label: '🌤️ 午餐' },
+    { key: 'snack2',    label: '🌙 下午點心' },
+    { key: 'dinner',    label: '🌙 晚餐' },
+    { key: 'latenight', label: '🦉 宵夜' },
+  ];
+  const moodEmoji = (score) => {
+    if (!score && score !== 0) return '';
+    const n = Number(score);
+    if (n <= 3) return `😔 ${n}分`;
+    if (n <= 6) return `😐 ${n}分`;
+    return `😊 ${n}分`;
+  };
+  const mealBlocksHTML = meals.map(m => {
+    const text = food[m.key] || '';
+    const imgs = food[m.key + '_imgs'] || [];
+    if (!text && !imgs.length) return '';
+    const imgsHTML = imgs.length
+      ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${imgs.map(src =>
+          `<img src="${src}" crossorigin="anonymous"
+            style="width:110px;height:110px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0;"
+            onerror="this.style.display='none'">`).join('')}</div>`
+      : '';
+    const textHTML = text
+      ? `<div style="font-size:13px;color:#334155;line-height:1.7;margin-top:6px;white-space:pre-wrap">${text}</div>`
+      : '';
+    return `
+      <div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;">
+        <div style="display:inline-block;background:#f1f5f9;color:#475569;font-size:11px;font-weight:700;
+          padding:3px 10px;border-radius:20px;margin-bottom:4px;">${m.label}</div>
+        ${imgsHTML}${textHTML}
+      </div>`;
+  }).filter(Boolean).join('');
+
+  const lifeItems = [
+    food.exType ? `🏃 運動：${food.exType}${food.exMin ? ' ' + food.exMin + '分' : ''}` : null,
+    food.water  ? `💧 飲水：${food.water}ml` : null,
+    food.sleep  ? `😴 睡眠：${food.sleep}小時` : null,
+    food.poop   ? `🚽 排便：${food.poop}次` : null,
+    (food.moodScore !== undefined && food.moodScore !== null) ? `心情：${moodEmoji(food.moodScore)}` : null,
+  ].filter(Boolean);
+
+  const lifeHTML = lifeItems.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">${lifeItems.map(t =>
+        `<span style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:20px;
+          padding:4px 12px;font-size:12px;color:#475569;">${t}</span>`).join('')}</div>`
+    : '';
+
+  const noteHTML = food.lifeNote
+    ? `<div style="background:#fef3c7;border-radius:8px;padding:10px 12px;
+        font-size:12px;color:#92400e;line-height:1.6;margin-bottom:12px;">
+        📝 <strong>飲食札記：</strong>${food.lifeNote}</div>`
+    : '';
+
+  const wrap = document.createElement('div');
+  wrap.id = 'export-tmp-dom';
+  wrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:560px;background:#f8fafc;font-family:Noto Sans TC,sans-serif;padding:0;';
+  wrap.innerHTML = `
+    <div style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 8px rgba(0,0,0,0.08);">
+      <div style="background:#0d9488;padding:16px 20px;color:#fff;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:10px;opacity:0.8;letter-spacing:1px;margin-bottom:3px;">🦁 Co-Dare 飲食紀錄</div>
+            <div style="font-size:20px;font-weight:900;">${s.name || '學員'}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:22px;font-weight:900;">${day}</div>
+            <div style="font-size:10px;opacity:0.75;margin-top:2px;">${new Date().getFullYear()}年</div>
+          </div>
+        </div>
+        ${s.goal ? `<div style="margin-top:8px;font-size:11px;opacity:0.85;background:rgba(255,255,255,0.15);
+          border-radius:6px;padding:4px 10px;display:inline-block;">🎯 ${s.goal}</div>` : ''}
+      </div>
+      <div style="padding:18px 20px;">
+        ${lifeHTML}${noteHTML}
+        ${mealBlocksHTML || `<div style="text-align:center;color:#94a3b8;font-size:13px;padding:24px 0;">（本日無詳細餐次紀錄）</div>`}
+        <div style="margin-top:8px;padding-top:12px;border-top:1px solid #e2e8f0;
+          display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:10px;color:#94a3b8;">由 Co-Dare 營養師後台匯出</div>
+          <div style="font-size:10px;color:#94a3b8;">${new Date().toLocaleDateString('zh-TW')}</div>
+        </div>
+      </div>
+    </div>`;
+  return wrap;
+}
 </script>
 </body>
 </html>
