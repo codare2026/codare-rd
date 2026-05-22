@@ -83,16 +83,31 @@ async function uploadToStorage(dataUrl, fileName, folder) {
 // ── Supabase 寫入（使用 upsert 確保跨裝置同步） ──
 async function sbWrite(key, val) {
   try {
+    let res;
+
     if (val === null) {
-      await fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}`, { method: 'DELETE', headers: SB_HDRS });
+      res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+        headers: SB_HDRS
+      });
     } else {
-      await fetch(`${SB_URL}/rest/v1/cd`, {
+      res = await fetch(`${SB_URL}/rest/v1/cd`, {
         method: 'POST',
         headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify({ key, value: val, updated_at: new Date().toISOString() })
       });
     }
-  } catch(e) { console.warn('Supabase write error:', e.message); }
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => '');
+      throw new Error(`Supabase write failed: ${res.status} ${msg}`);
+    }
+
+    return true;
+  } catch(e) {
+    console.warn('Supabase write error:', e.message);
+    throw e;
+  }
 }
 
 // ── 從 localStorage 預載 cache（瞬間啟動） ──
@@ -892,7 +907,7 @@ async function doRdLogin() {
           const renders = { dashboard: renderDashboard, feedback: renderFeedback,
             students: renderStudentsPage, weekplan: renderWeekplan,
             menu: renderMenuMgr, materials: renderMaterials };
-          if (renders[currentSection]) el.innerHTML = renders[currentSection]();
+          if (renders[currentSection]) el.innerHTML = await renders[currentSection]();
         }
       } catch(e) { console.warn('bg sync failed:', e.message); }
     }, 300);
@@ -970,7 +985,7 @@ function doRdLogout() {
               if (el && currentSection) {
                 const r = { dashboard: renderDashboard, feedback: renderFeedback,
                   students: renderStudentsPage, menu: renderMenuMgr, materials: renderMaterials };
-                if (r[currentSection]) el.innerHTML = r[currentSection]();
+                if (r[currentSection]) el.innerHTML = await r[currentSection]();
               }
             } catch(e) { console.warn('auto bg sync failed:', e.message); }
           }, 300);
@@ -1122,13 +1137,15 @@ async function syncRdData() {
     await warmCache(); // Full sync when user explicitly requests
     hideLoading();
     showToast('✅ 資料已同步！');
-    document.getElementById('main-content').innerHTML = (
-      { dashboard: renderDashboard, feedback: renderFeedback,
-        students: renderStudentsPage, weekplan: renderWeekplan,
-        bodytrack: renderBodyTrack, menu: renderMenuMgr,
-        materials: renderMaterials, accounts: renderAccounts,
-        report: renderReport }[currentSection] || renderDashboard
-    )();
+    const renderFn = (
+  { dashboard: renderDashboard, feedback: renderFeedback,
+    students: renderStudentsPage, weekplan: renderWeekplan,
+    bodytrack: renderBodyTrack, menu: renderMenuMgr,
+    materials: renderMaterials, accounts: renderAccounts,
+    report: renderReport }[currentSection] || renderDashboard
+);
+
+document.getElementById('main-content').innerHTML = await renderFn();
     updateBadge();
   } catch(e) {
     hideLoading();
@@ -3675,7 +3692,7 @@ async function renderMaterials() {
 
   const now = Date.now();
   const ONE_YEAR = 365 * 24 * 60 * 60 * 1000;
-  let rawItems = []; try {   const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };   const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.ency_${encodeURIComponent(s.id)}&select=value`, { headers: GET_HDRS });   if (res.ok) {     const rows = await res.json();     if (rows[0]?.value) rawItems = rows[0].value;   } } catch(e) {   rawItems = gs(`ency_${s.id}`) || []; }
+  let rawItems = gs(`ency_${s.id}`) || [];  try {   const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };   const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.ency_${encodeURIComponent(s.id)}&select=value`, { headers: GET_HDRS });    if (res.ok) {     const rows = await res.json();     if (rows[0]?.value) {       rawItems = rows[0].value;       _cache[`ency_${s.id}`] = rawItems;       try {         localStorage.setItem('cd_ency_' + s.id, JSON.stringify(rawItems));       } catch {}     }   } } catch(e) {   rawItems = gs(`ency_${s.id}`) || []; }
 
   // Mark expired items and flag them
   const encyItems = rawItems.map(item => ({
@@ -3904,26 +3921,70 @@ function handleEncyDrop(event) {
 function compressImage(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
+
     reader.onload = e => {
       const img = new Image();
+
       img.onload = () => {
-        const MAX = 800;
+        const MAX = 1600;
+        const TARGET_KB = 500;
+        const MAX_KB = 650;
+
         let { width: w, height: h } = img;
+
         if (w > MAX || h > MAX) {
-          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-          else       { w = Math.round(w * MAX / h); h = MAX; }
+          if (w > h) {
+            h = Math.round(h * MAX / w);
+            w = MAX;
+          } else {
+            w = Math.round(w * MAX / h);
+            h = MAX;
+          }
         }
+
         const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        const compressed = canvas.toDataURL('image/jpeg', 0.4);
+        canvas.width = w;
+        canvas.height = h;
+
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, w, h);
+
+        let quality = 0.92;
+        let compressed = canvas.toDataURL('image/jpeg', quality);
+        let newKB = Math.round(compressed.length * 0.75 / 1024);
+
+        while (newKB > MAX_KB && quality > 0.72) {
+          quality -= 0.05;
+          compressed = canvas.toDataURL('image/jpeg', quality);
+          newKB = Math.round(compressed.length * 0.75 / 1024);
+        }
+
         const origKB = Math.round(file.size / 1024);
-        const newKB  = Math.round(compressed.length * 0.75 / 1024);
-        resolve({ name: file.name, type: 'image/jpeg', data: compressed, sizeMB: (newKB/1024).toFixed(1), origKB, newKB });
+
+        resolve({
+          name: file.name.replace(/\.[^.]+$/, '') + '.jpg',
+          type: 'image/jpeg',
+          data: compressed,
+          sizeMB: (newKB / 1024).toFixed(1),
+          origKB,
+          newKB
+        });
       };
-      img.onerror = () => resolve({ name: file.name, type: file.type, data: e.target.result, sizeMB: (file.size/1024/1024).toFixed(1) });
+
+      img.onerror = () => resolve({
+        name: file.name,
+        type: file.type,
+        data: e.target.result,
+        sizeMB: (file.size / 1024 / 1024).toFixed(1),
+        origKB: Math.round(file.size / 1024),
+        newKB: Math.round(file.size / 1024)
+      });
+
       img.src = e.target.result;
     };
+
     reader.onerror = () => resolve(null);
     reader.readAsDataURL(file);
   });
@@ -3979,8 +4040,13 @@ function previewEncy(idx, studentId) {
   }
 }
 
-function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendingEncyFiles = []; encyTabMode = 'file'; renderMaterials().then(html => document.getElementById('main-content').innerHTML = html); }
-
+async function switchMatStudent(id) {
+  matStudentId = id;
+  pendingEncyFile = null;
+  pendingEncyFiles = [];
+  encyTabMode = 'file';
+  document.getElementById('main-content').innerHTML = await renderMaterials();
+}
 async function addEncy(studentId) {
   const title = document.getElementById('ency-title')?.value?.trim();
   const desc = getEncyDesc();   // selected option value = catKey or course_N
@@ -4045,28 +4111,42 @@ async function addEncy(studentId) {
       });
     }
 
-    ss(`ency_${studentId}`, existingItems);
+    _cache[`ency_${studentId}`] = existingItems; try {   localStorage.setItem('cd_ency_' + studentId, JSON.stringify(existingItems)); } catch {} await sbWrite(`ency_${studentId}`, existingItems);
     const count = pendingEncyFiles.length || 1;
     pendingEncyFile = null;
     pendingEncyFiles = [];
     showToast(`✅ 已新增 ${count} 份教材！`);
-    renderMaterials().then(html => document.getElementById('main-content').innerHTML = html);
+    document.getElementById('main-content').innerHTML = await renderMaterials();
     // Show notify dialog
     showNotifyDialog(
       studentId, 'materials', '教材上傳',
       () => NOTIFY_DEFAULTS.materials()
     );
   } catch(e) {
-    showToast('⚠️ 儲存空間不足，建議改用「貼上連結」方式上傳大型檔案');
-  }
+  hideLoading();
+  console.warn('addEncy failed:', e);
+  showToast('⚠️ 儲存失敗，請稍後再試或改用「貼上連結」方式');
+}
 }
 
-function deleteEncy(studentId, idx) {
-  const items = gs(`ency_${studentId}`) || [];
-  items.splice(idx, 1);
-  ss(`ency_${studentId}`, items);
-  showToast('🗑️ 已刪除');
-  renderMaterials().then(html => document.getElementById('main-content').innerHTML = html);
+async function deleteEncy(studentId, idx) {
+  try {
+    const items = gs(`ency_${studentId}`) || [];
+    items.splice(idx, 1);
+
+    _cache[`ency_${studentId}`] = items;
+    try {
+      localStorage.setItem('cd_ency_' + studentId, JSON.stringify(items));
+    } catch {}
+
+    await sbWrite(`ency_${studentId}`, items);
+
+    showToast('🗑️ 已刪除');
+    document.getElementById('main-content').innerHTML = await renderMaterials();
+  } catch(e) {
+    console.warn('deleteEncy failed:', e);
+    showToast('⚠️ 刪除失敗，請稍後再試');
+  }
 }
 
 // ══════════════════════════════════════
