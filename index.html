@@ -3979,7 +3979,7 @@ function previewEncy(idx, studentId) {
   }
 }
 
-function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendingEncyFiles = []; encyTabMode = 'file'; document.getElementById('main-content').innerHTML = renderMaterials(); }
+function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendingEncyFiles = []; encyTabMode = 'file'; renderMaterials().then(html => document.getElementById('main-content').innerHTML = html); }
 
 async function addEncy(studentId) {
   const title = document.getElementById('ency-title')?.value?.trim();
@@ -4050,7 +4050,7 @@ async function addEncy(studentId) {
     pendingEncyFile = null;
     pendingEncyFiles = [];
     showToast(`✅ 已新增 ${count} 份教材！`);
-    document.getElementById('main-content').innerHTML = renderMaterials();
+    renderMaterials().then(html => document.getElementById('main-content').innerHTML = html);
     // Show notify dialog
     showNotifyDialog(
       studentId, 'materials', '教材上傳',
@@ -4066,7 +4066,7 @@ function deleteEncy(studentId, idx) {
   items.splice(idx, 1);
   ss(`ency_${studentId}`, items);
   showToast('🗑️ 已刪除');
-  document.getElementById('main-content').innerHTML = renderMaterials();
+  renderMaterials().then(html => document.getElementById('main-content').innerHTML = html);
 }
 
 // ══════════════════════════════════════
