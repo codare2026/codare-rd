@@ -2622,7 +2622,7 @@ function saveIntake(id, section) {
     });
   }
 
-  ss(`intake_${id}`, intake);
+  const existingIntake = gs(`intake_${id}`) || {}; ss(`intake_${id}`, { ...existingIntake, ...intake });
   closeModal();
   showToast('✅ 建檔資料已儲存！');
   document.getElementById('main-content').innerHTML = renderIntakeCard(id);
