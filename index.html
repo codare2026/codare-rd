@@ -1628,7 +1628,16 @@ function renderFeedback() {
     </div>
   </div>
 
-  <div class="card">${contentHTML}</div>`;
+  <div class="card">
+    ${contentHTML}
+    ${food && (food.hasData || food.notified) ? `
+    <div class="divider" style="margin-top:20px"></div>
+    <div style="display:flex;justify-content:flex-end">
+      <button class="btn btn-outline" onclick="exportDailyDiary('${feedbackStudentId}','${selectedFeedbackDay}')" style="gap:6px">
+        📸 匯出當日紀錄（JPG）
+      </button>
+    </div>` : ''}
+  </div>`;
 }
 
 function switchFeedbackStudent(id) {
@@ -4601,6 +4610,109 @@ function showModal(title, bodyHTML, buttons = []) {
     </div>`;
 }
 function closeModal() { document.getElementById('modal-container').innerHTML = ''; }
+
+// ── 匯出當日飲食紀錄為 JPG ──
+async function exportDailyDiary(studentId, day) {
+  const s = getActiveStudents().find(x => x.id === studentId) || { name: studentId };
+  const food = gs(`food_${studentId}_${day}`) || {};
+  showLoading('產生圖片中…');
+  let el;
+  try {
+    el = buildExportDOM(s, day, food);
+    document.body.appendChild(el);
+    if (!window.html2canvas) {
+      await new Promise((res, rej) => {
+        const sc = document.createElement('script');
+        sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        sc.onload = res; sc.onerror = rej;
+        document.head.appendChild(sc);
+      });
+    }
+    const imgs = Array.from(el.querySelectorAll('img'));
+    await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r; })));
+    await new Promise(r => setTimeout(r, 400));
+    const canvas = await window.html2canvas(el, {
+      scale: 2, useCORS: true, allowTaint: true,
+      backgroundColor: '#f8fafc', logging: false,
+      width: el.offsetWidth, height: el.offsetHeight
+    });
+    document.body.removeChild(el);
+    const link = document.createElement('a');
+    link.download = `${s.name}_${day.replace(/\//g,'-')}_飲食紀錄.jpg`;
+    link.href = canvas.toDataURL('image/jpeg', 0.93);
+    link.click();
+    hideLoading();
+    showToast('✅ 已匯出！');
+  } catch(e) {
+    try { if (el) document.body.removeChild(el); } catch {}
+    hideLoading();
+    showToast('⚠️ 匯出失敗：' + e.message);
+  }
+}
+
+function buildExportDOM(s, day, food) {
+  const meals = [
+    { key: 'breakfast', label: '🌅 早餐' },
+    { key: 'snack1',    label: '🍪 點心（上午）' },
+    { key: 'lunch',     label: '☀️ 午餐' },
+    { key: 'snack2',    label: '🍎 點心（下午）' },
+    { key: 'dinner',    label: '🌙 晚餐' },
+    { key: 'latenight', label: '🌃 宵夜' }
+  ];
+  const moodEmoji = n => n <= 3 ? '😔' : n <= 6 ? '😐' : '😊';
+  const moodColor = n => n <= 3 ? '#ef4444' : n <= 6 ? '#f59e0b' : '#22c55e';
+  const mealRows = meals.map(m => {
+    const text = food[m.key] || '';
+    const imgs = food[m.key + '_imgs'] || [];
+    if (!text && !imgs.length) return '';
+    const imgHTML = imgs.map(src =>
+      `<img src="${src}" crossorigin="anonymous" style="width:220px;height:220px;object-fit:cover;border-radius:12px;border:2px solid #e2e8f0;flex-shrink:0">`
+    ).join('');
+    return `
+    <div style="margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid #e2e8f0">
+      <div style="font-size:15px;font-weight:700;color:#0f766e;margin-bottom:10px">${m.label}</div>
+      ${imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px">${imgHTML}</div>` : ''}
+      ${text ? `<div style="font-size:15px;color:#334155;line-height:1.8;background:#f8fafc;padding:10px 14px;border-radius:8px;border-left:3px solid #0d9488">${text}</div>` : ''}
+    </div>`;
+  }).filter(Boolean).join('');
+  const lifeData = [
+    food.exType ? `🏃 運動：${food.exType}${food.exMin ? ' ' + food.exMin + '分鐘' : ''}` : '',
+    food.water  ? `💧 飲水：${food.water} ml` : '',
+    food.sleep  ? `😴 睡眠：${food.sleep} 小時` : '',
+    food.poop   ? `🚽 排便：${food.poop} 次` : '',
+  ].filter(Boolean);
+  const hasMood = food.moodScore !== undefined && food.moodScore !== null;
+  const moodHTML = hasMood ? `
+    <div style="display:inline-flex;align-items:center;gap:8px;background:${moodColor(food.moodScore)}18;padding:8px 14px;border-radius:20px;margin-top:8px">
+      <span style="font-size:22px">${moodEmoji(food.moodScore)}</span>
+      <span style="font-size:15px;font-weight:700;color:${moodColor(food.moodScore)}">心情 ${food.moodScore} 分</span>
+      ${food.moodNote ? `<span style="font-size:13px;color:#64748b">　${food.moodNote}</span>` : ''}
+    </div>` : '';
+  const lifeHTML = (lifeData.length || hasMood || food.lifeNote) ? `
+    <div style="margin-top:16px;padding:16px;background:#f0fdf9;border-radius:12px;border:1.5px solid #99f6e4">
+      <div style="font-size:14px;font-weight:700;color:#0f766e;margin-bottom:10px">📝 生活細節</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        ${lifeData.map(t => `<span style="background:#fff;border:1px solid #ccfbf1;border-radius:20px;padding:5px 14px;font-size:14px;color:#334155">${t}</span>`).join('')}
+      </div>
+      ${moodHTML}
+      ${food.lifeNote ? `<div style="margin-top:10px;font-size:14px;color:#475569;line-height:1.7;padding:10px;background:#fff;border-radius:8px">📒 ${food.lifeNote}</div>` : ''}
+    </div>` : '';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:700px;background:#f8fafc;font-family:\'Noto Sans TC\',sans-serif;padding:32px;';
+  wrap.innerHTML = `
+    <div style="background:linear-gradient(135deg,#0d9488,#0f766e);padding:24px 28px;border-radius:16px;margin-bottom:24px;color:#fff">
+      <div style="font-size:22px;font-weight:900;margin-bottom:4px">🦁 Co-Dare 飲食紀錄</div>
+      <div style="font-size:16px;opacity:0.9">${s.name} ・ ${day}</div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:24px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
+      ${mealRows || '<div style="text-align:center;padding:24px;color:#94a3b8;font-size:14px">無飲食紀錄</div>'}
+    </div>
+    ${lifeHTML}
+    <div style="margin-top:20px;text-align:center;font-size:12px;color:#94a3b8">
+      Co-Dare 口袋營養獅 ・ 匯出時間：${new Date().toLocaleString('zh-TW')}
+    </div>`;
+  return wrap;
+}
 </script>
 </body>
 </html>
