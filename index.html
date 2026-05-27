@@ -1597,17 +1597,29 @@ function renderFeedback() {
       : (food.rdFeedback ? [{ text: food.rdFeedback, at: food.rdFeedbackAt, id: 0 }] : []);
 
     const overallBubbles = overallArr.map((fb, fi) => `
-      <div class="feedback-box" style="margin-bottom:10px">
-        <div style="white-space:pre-wrap;font-size:13px">${fb.text}</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
-          <span style="font-size:10px;color:var(--g4)">${fb.at ? new Date(fb.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#fff;border:1px solid var(--teal);color:var(--teal);border-radius:5px;cursor:pointer"
-              onclick="startEditOverallFb(${fi},\`${fb.text.replace(/`/g,'&#96;')}\`)">✏️ 編輯</button>
-            <button class="btn btn-sm" style="font-size:11px;padding:3px 10px;background:#fff;border:1px solid var(--red);color:var(--red);border-radius:5px;cursor:pointer"
-              onclick="deleteOverallFeedback('${s.id}','${selectedFeedbackDay}',${fi})">🗑️ 刪除</button>
+      <div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:10px">
+        <div style="max-width:78%;text-align:right">
+          <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${currentRD?.name || '營養師'}
+            <span style="margin-left:6px;color:var(--g3)">${fb.at ? new Date(fb.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
+          </div>
+          <div id="overall-edit-wrap-${fi}" style="display:none;margin-bottom:4px">
+            <textarea id="overall-edit-ta-${fi}" rows="3" style="width:260px;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;outline:none;text-align:left">${fb.text}</textarea>
+            <div style="display:flex;gap:5px;margin-top:3px;justify-content:flex-end">
+              <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('overall-edit-wrap-${fi}').style.display='none';document.getElementById('overall-bubble-${fi}').style.display=''">取消</button>
+              <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditOverallFbInline('${s.id}','${selectedFeedbackDay}',${fi})">更新</button>
+            </div>
+          </div>
+          <div id="overall-bubble-${fi}">
+            <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 14px;font-size:13px;line-height:1.8;text-align:left;white-space:pre-wrap;display:inline-block">${fb.text}</div>
+            <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
+              <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
+                onclick="document.getElementById('overall-edit-wrap-${fi}').style.display='';document.getElementById('overall-bubble-${fi}').style.display='none'">✏️</button>
+              <button style="background:none;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
+                onclick="deleteOverallFeedback('${s.id}','${selectedFeedbackDay}',${fi})">🗑️</button>
+            </div>
           </div>
         </div>
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0">${(currentRD?.name||'師').charAt(0)}</div>
       </div>`).join('');
 
     contentHTML = `
