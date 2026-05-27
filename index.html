@@ -1639,11 +1639,13 @@ function renderFeedback() {
       })() : ''}
       ${food.lifeNote ? `<div style="margin-top:12px;padding:12px;background:var(--amber-light);border-radius:8px;font-size:13px;line-height:1.7">📝 <strong>飲食札記：</strong>${food.lifeNote}</div>` : ''}
       ${(() => {
-        // 合併營養師回饋 + 學員回覆，按時間排序
+        // 整日總結：只用 rdFeedbacks，不包含餐次回饋
         const rdMsgs = (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks
           : (food.rdFeedback ? [{ text: food.rdFeedback, at: food.rdFeedbackAt }] : []))
           .map(fb => ({ ...fb, role: 'rd' }));
+        // 學員回覆：只顯示沒有【餐次】前綴的（整日回覆）
         const stuMsgs = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
+          .filter(r => !r.text?.match(/^【(早餐|上午點心|午餐|下午點心|晚餐|宵夜)】/))
           .map(r => ({ ...r, role: 'stu' }));
         const all = [...rdMsgs, ...stuMsgs].sort((a, b) => new Date(a.at||0) - new Date(b.at||0));
         if (!all.length) return '';
