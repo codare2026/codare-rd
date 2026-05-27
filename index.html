@@ -1211,13 +1211,13 @@ function toggleSidebar() {
 }
 
 async function syncRdData() {
-  showLoading('同步資料中…');
+  showLoading('同步資async function syncRdData() {
+  const btn = document.querySelector('[onclick="syncRdData()"]');
+  if (btn) { btn.style.opacity = '0.5'; btn.textContent = '🔄 同步中…'; }
   try {
-    // 手動同步：清除增量時間戳，強制完整同步
     const rdId = currentRD?.id || '';
     localStorage.removeItem('cd_last_sync_rd_' + rdId);
-    await warmCache(); // Full sync when user explicitly requests
-    hideLoading();
+    await warmCache();
     showToast('✅ 資料已同步！');
     document.getElementById('main-content').innerHTML = (
       { dashboard: renderDashboard, feedback: renderFeedback,
@@ -1228,8 +1228,9 @@ async function syncRdData() {
     )();
     updateBadge();
   } catch(e) {
-    hideLoading();
     showToast('⚠️ 同步失敗，請檢查網路連線');
+  } finally {
+    if (btn) { btn.style.opacity = ''; btn.textContent = '🔄 同步'; }
   }
 }
 
