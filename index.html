@@ -1674,17 +1674,7 @@ function renderFeedback() {
           }
         }).join('');
       })()}
-          ${food.studentReplies.map(r => {
-            const isUnread = !food.rdRepliesReadAt || food.rdRepliesReadAt < r.at;
-            return `<div style="font-size:13px;color:var(--g7);line-height:1.6;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.05);${isUnread ? 'background:rgba(255,100,100,0.04);margin:0 -4px;padding:8px 4px;border-radius:6px;' : ''}">
-              <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-                ${isUnread ? '<span style="width:7px;height:7px;background:#ef4444;border-radius:50%;display:inline-block;flex-shrink:0"></span>' : ''}
-                <span style="color:var(--g5);font-size:11px">${new Date(r.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
-              </div>
-              ${r.text}
-            </div>`;
-          }).join('')}
-        </div>` : ''}
+          
 
       <div class="divider"></div>
       <div style="font-size:14px;font-weight:700;color:var(--g7);margin-bottom:12px">📝 整日總結回饋</div>
