@@ -979,6 +979,34 @@ function launchRdApp() {
   if (adminSection) adminSection.style.display = currentRD.superAdmin ? '' : 'none';
   const mmAccounts = document.getElementById('mm-accounts');
   if (mmAccounts) mmAccounts.style.display = currentRD.superAdmin ? 'flex' : 'none';
+  // Realtime WebSocket
+  try {
+    const wsUrl = `${SB_URL.replace('https','wss')}/realtime/v1/websocket?apikey=${SB_KEY}&vsn=1.0.0`;
+    const ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ topic: 'realtime:public:cd', event: 'phx_join', payload: {}, ref: '1' }));
+    };
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.event === 'postgres_changes' || msg.event === 'INSERT' || msg.event === 'UPDATE') {
+          const record = msg.payload?.record || msg.payload?.new;
+          if (!record?.key) return;
+          _cache[record.key] = record.value;
+          try { localStorage.setItem('cd_' + record.key, JSON.stringify(record.value)); } catch {}
+          updateBadge();
+          if (currentSection === 'feedback') {
+            document.getElementById('main-content').innerHTML = renderFeedback();
+          }
+          if (currentSection === 'dashboard') {
+            document.getElementById('main-content').innerHTML = renderDashboard();
+          }
+        }
+      } catch(e) {}
+    };
+    ws.onerror = () => {};
+    ws.onclose = () => {};
+  } catch(e) {}
   showSection('dashboard');
   // 每 60 秒自動偵測學員新回覆
   setInterval(async () => {
