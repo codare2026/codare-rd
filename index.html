@@ -1680,39 +1680,58 @@ function renderFeedback() {
 
       <div class="divider"></div>
       <div style="font-size:14px;font-weight:700;color:var(--g7);margin-bottom:12px">📝 整日總結回饋</div>
-      <div style="background:var(--g0);border-radius:12px;padding:14px;margin-bottom:12px">
-      ${overallArr.map((fb, fi) => `
-        <div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:10px">
-          <div style="max-width:78%;text-align:right">
-            <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${currentRD?.name || '營養師'}
-              <span style="margin-left:6px;color:var(--g3)">${fb.at ? new Date(fb.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
-            </div>
-            <div id="overall-edit-wrap-${fi}" style="display:none;margin-bottom:4px">
-              <textarea id="overall-edit-ta-${fi}" rows="3" style="width:260px;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;outline:none;text-align:left">${fb.text}</textarea>
-              <div style="display:flex;gap:5px;margin-top:3px;justify-content:flex-end">
-                <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('overall-edit-wrap-${fi}').style.display='none';document.getElementById('overall-bubble-${fi}').style.display=''">取消</button>
-                <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditOverallFbInline('${s.id}','${selectedFeedbackDay}',${fi})">更新</button>
-              </div>
-            </div>
-            <div id="overall-bubble-${fi}">
-              <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 14px;font-size:13px;line-height:1.8;text-align:left;white-space:pre-wrap;display:inline-block">${fb.text}</div>
-              <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
-                <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
-                  onclick="document.getElementById('overall-edit-wrap-${fi}').style.display='';document.getElementById('overall-bubble-${fi}').style.display='none'">✏️</button>
-                <button style="background:none;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
-                  onclick="deleteOverallFeedback('${s.id}','${selectedFeedbackDay}',${fi})">🗑️</button>
-              </div>
-            </div>
-          </div>
-          <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0">${(currentRD?.name||'師').charAt(0)}</div>
-        </div>`).join('')}
-      </div>
-      <div id="overall-edit-wrap" style="display:none;margin-bottom:10px">
-        <textarea id="overall-edit-ta" rows="3" style="width:100%;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;outline:none"></textarea>
-        <div style="display:flex;gap:8px;margin-top:6px;justify-content:flex-end">
-          <button class="btn btn-outline btn-sm" onclick="document.getElementById('overall-edit-wrap').style.display='none'">取消</button>
-          <button class="btn btn-teal btn-sm" onclick="saveEditOverallFb('${s.id}','${selectedFeedbackDay}')">更新</button>
-        </div>
+      <div style="background:var(--g0);border-radius:12px;padding:14px;margin-bottom:4px">
+        ${(() => {
+          const rdMsgs = (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks
+            : (food.rdFeedback ? [{ text: food.rdFeedback, at: food.rdFeedbackAt }] : []))
+            .map(fb => ({ ...fb, role: 'rd' }));
+          const stuMsgs = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
+            .filter(r => !r.text?.match(/^【(早餐|上午點心|午餐|下午點心|晚餐|宵夜)】/))
+            .map(r => ({ ...r, role: 'stu' }));
+          const all = [...rdMsgs, ...stuMsgs].sort((a, b) => new Date(a.at||0) - new Date(b.at||0));
+          if (!all.length) return '<div style="color:var(--g3);font-size:13px;padding:8px 0;text-align:center">尚未有整日總結</div>';
+          const sName = getStudentName(feedbackStudentId);
+          return all.map((msg, mi) => {
+            const isUnread = msg.role === 'stu' && (!food.rdRepliesReadAt || food.rdRepliesReadAt < msg.at);
+            if (msg.role === 'rd') {
+              return `<div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:10px">
+                <div style="max-width:78%;text-align:right">
+                  <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${currentRD?.name||'營養師'}
+                    <span style="margin-left:6px;color:var(--g3)">${msg.at ? new Date(msg.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
+                  </div>
+                  <div id="overall-edit-wrap-${mi}" style="display:none;margin-bottom:4px">
+                    <textarea id="overall-edit-ta-${mi}" rows="3" style="width:260px;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;outline:none;text-align:left">${msg.text}</textarea>
+                    <div style="display:flex;gap:5px;margin-top:3px;justify-content:flex-end">
+                      <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('overall-edit-wrap-${mi}').style.display='none';document.getElementById('overall-bubble-${mi}').style.display=''">取消</button>
+                      <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditOverallFbInline('${s.id}','${selectedFeedbackDay}',${mi})">更新</button>
+                    </div>
+                  </div>
+                  <div id="overall-bubble-${mi}">
+                    <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 14px;font-size:13px;line-height:1.8;text-align:left;white-space:pre-wrap;display:inline-block">${msg.text}</div>
+                    <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
+                      <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
+                        onclick="document.getElementById('overall-edit-wrap-${mi}').style.display='';document.getElementById('overall-bubble-${mi}').style.display='none'">✏️</button>
+                      <button style="background:none;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
+                        onclick="deleteOverallFeedback('${s.id}','${selectedFeedbackDay}',${mi})">🗑️</button>
+                    </div>
+                  </div>
+                </div>
+                <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0">${(currentRD?.name||'師').charAt(0)}</div>
+              </div>`;
+            } else {
+              return `<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
+                <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${sName.charAt(0)}</div>
+                <div style="max-width:75%">
+                  <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${sName}
+                    <span style="margin-left:4px">${msg.at ? new Date(msg.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : ''}</span>
+                    ${isUnread ? '<span style="margin-left:4px;width:7px;height:7px;background:#ef4444;border-radius:50%;display:inline-block"></span>' : ''}
+                  </div>
+                  <div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;color:var(--g7)">${msg.text}</div>
+                </div>
+              </div>`;
+            }
+          }).join('');
+        })()}
       </div>
       <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px;padding-top:10px;border-top:1px dashed var(--g2)">
         <div style="flex:1">
