@@ -1681,21 +1681,22 @@ function renderFeedback() {
           if (!all.length) return '<div style="color:var(--g3);font-size:13px;padding:8px 0;text-align:center">尚未有整日總結</div>';
           const sName = getStudentName(feedbackStudentId);
           return all.map((msg, mi) => {
-            const isUnread = msg.role === 'stu' && (!food.rdRepliesReadAt || food.rdRepliesReadAt < msg.at);
+  const realFbIdx = msg.role === 'rd' ? (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks : []).indexOf(msg) : -1;
+  const isUnread = msg.role === 'stu' && (!food.rdRepliesReadAt || food.rdRepliesReadAt < msg.at);
             if (msg.role === 'rd') {
               return `<div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:10px">
                 <div style="max-width:78%;text-align:right">
                   <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${currentRD?.name||'營養師'}
                     <span style="margin-left:6px;color:var(--g3)">${msg.at ? new Date(msg.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
                   </div>
-                  <div id="overall-edit-wrap-${mi}" style="display:none;margin-bottom:4px">
-                    <textarea id="overall-edit-ta-${mi}" rows="3" style="width:260px;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;outline:none;text-align:left">${msg.text}</textarea>
+                  <div id="overall-edit-wrap-${realFbIdx}" style="display:none;margin-bottom:4px">
+                    <textarea id="overall-edit-ta-${realFbIdx}" rows="3" style="width:260px;border:1.5px solid var(--teal);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:none;outline:none;text-align:left">${msg.text}</textarea>
                     <div style="display:flex;gap:5px;margin-top:3px;justify-content:flex-end">
                       <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('overall-edit-wrap-${mi}').style.display='none';document.getElementById('overall-bubble-${mi}').style.display=''">取消</button>
-                      <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditOverallFbInline('${s.id}','${selectedFeedbackDay}',${mi})">更新</button>
+                      <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditOverallFbInline('${s.id}','${selectedFeedbackDay}',${realFbIdx})">更新</button>
                     </div>
                   </div>
-                  <div id="overall-bubble-${mi}">
+                  <div id="overall-bubble-${realFbIdx}">
                     <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 14px;font-size:13px;line-height:1.8;text-align:left;white-space:pre-wrap;display:inline-block">${msg.text}</div>
                     <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
                       <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
