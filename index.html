@@ -1600,7 +1600,9 @@ function renderFeedback() {
           <textarea id="meal-fb-${m.key}" rows="1" placeholder="回覆${m.label}…"
             style="flex:1;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')}"></textarea>
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')}"             
+            oninput="localStorage.setItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}', this.value)"             
+            >${localStorage.getItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}') || ''}</textarea>
           <button style="width:36px;height:36px;border-radius:50%;background:var(--teal);border:none;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s"
             onmouseover="this.style.background='var(--teal-dark)'" onmouseout="this.style.background='var(--teal)'"
             onclick="saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')">▲</button>
@@ -1725,10 +1727,13 @@ function renderFeedback() {
       </div>
       <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px;padding-top:10px;border-top:1px dashed var(--g2)">
         <div style="flex:1">
-          <textarea id="fb-input" rows="1" placeholder="新增一則整日總結…"
+          <textarea id="fb-input" rows="1" placeholder="新增一則整日總結…"   
+            oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
             style="width:100%;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveFeedback('${s.id}','${selectedFeedbackDay}')}"></textarea>
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveFeedback('${s.id}','${selectedFeedbackDay}')}"             
+            oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"             
+            >${localStorage.getItem('draft_overall_${s.id}_${selectedFeedbackDay}') || ''}</textarea>
           <div style="display:flex;justify-content:flex-end;margin-top:6px">
             <select id="template-select" onchange="insertSelectedTemplate(this)" style="padding:4px 8px;border:1.5px solid var(--g2);border-radius:8px;font-size:12px;font-family:inherit;outline:none;background:#fff;cursor:pointer;max-width:200px" title="選擇常用語句插入">
               <option value="">📋 常用語句…</option>
@@ -1911,7 +1916,8 @@ function saveFeedback(studentId, day) {
   existing.rdViewedAt = new Date().toISOString();
   ss(`food_${studentId}_${day}`, existing);
   document.getElementById('fb-input').value = '';
-  showToast('✅ 總結回覆已送出！');
+  showToast('✅ 總結回覆已送出！');   
+  localStorage.removeItem(`draft_overall_${studentId}_${day}`);
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
   // 推播通知學員
@@ -1958,7 +1964,8 @@ function saveMealFeedback(studentId, day, mealKey) {
   existing.rdViewed = true;
   existing.rdViewedAt = new Date().toISOString();
   ss(`food_${studentId}_${day}`, existing);
-  showToast('✅ 餐別回饋已送出！');
+  showToast('✅ 餐別回饋已送出！');   
+  localStorage.removeItem(`draft_meal_${studentId}_${day}_${mealKey}`);
   if (input) input.value = '';
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
