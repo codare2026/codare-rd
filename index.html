@@ -1597,7 +1597,7 @@ function renderFeedback() {
               </div>
             </div>
             <div id="meal-bubble-${m.key}-${fi}" style="display:inline-flex;flex-direction:column;align-items:flex-end">
-              <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;text-align:left;white-space:pre-wrap">${fb.text}</div>
+${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;justify-content:flex-end">${fb.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:100px;height:100px;object-fit:cover;border-radius:8px;cursor:pointer">`).join('')}</div>` : ''}               <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;text-align:left;white-space:pre-wrap">${fb.text}</div>
               <div style="display:flex;gap:4px;margin-top:4px">
                 <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
                   onclick="document.getElementById('meal-edit-wrap-${m.key}-${fi}').style.display='';document.getElementById('meal-bubble-${m.key}-${fi}').style.display='none'">✏️</button>
@@ -1611,6 +1611,13 @@ function renderFeedback() {
 
         <!-- 輸入框 -->
         <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px;padding-top:10px;border-top:1px dashed var(--g2)">
+          <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+            <label style="cursor:pointer;display:flex;align-items:center;gap:4px;font-size:12px;color:var(--teal);border:1px solid var(--teal);border-radius:6px;padding:3px 10px">
+              📷 附圖
+              <input type="file" accept="image/*" multiple style="display:none" onchange="handleRdImgUpload(event,'meal','${s.id}','${selectedFeedbackDay}','${m.key}')">
+            </label>
+            <div id="rd-img-preview-${m.key}" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+          </div>
           <textarea id="meal-fb-${m.key}" rows="1" placeholder="回覆${m.label}…"
             style="flex:1;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
@@ -1714,7 +1721,7 @@ function renderFeedback() {
                     </div>
                   </div>
                   <div id="overall-bubble-${realFbIdx}">
-                    <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 14px;font-size:13px;line-height:1.8;text-align:left;white-space:pre-wrap;display:inline-block">${msg.text}</div>
+                    ${msg.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;justify-content:flex-end">${msg.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:100px;height:100px;object-fit:cover;border-radius:8px;cursor:pointer">`).join('')}</div>` : ''}               <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 14px;font-size:13px;line-height:1.8;text-align:left;white-space:pre-wrap;display:inline-block">${msg.text}</div>
                     <div style="display:flex;gap:4px;margin-top:4px;justify-content:flex-end">
                       <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
                         onclick="document.getElementById('overall-edit-wrap-${realFbIdx}').style.display='';document.getElementById('overall-bubble-${realFbIdx}').style.display='none'">✏️</button>
@@ -1742,6 +1749,13 @@ function renderFeedback() {
       </div>
       <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px;padding-top:10px;border-top:1px dashed var(--g2)">
         <div style="flex:1">
+        <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+            <label style="cursor:pointer;display:flex;align-items:center;gap:4px;font-size:12px;color:var(--teal);border:1px solid var(--teal);border-radius:6px;padding:3px 10px">
+              📷 附圖
+              <input type="file" accept="image/*" multiple style="display:none" onchange="handleRdImgUpload(event,'overall','${s.id}','${selectedFeedbackDay}',null)">
+            </label>
+            <div id="rd-img-preview-overall" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+          </div>
           <textarea id="fb-input" rows="1" placeholder="新增一則整日總結…"   
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
             style="width:100%;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
@@ -1923,7 +1937,7 @@ function saveFeedback(studentId, day) {
   const existing = gs(`food_${studentId}_${day}`) || {};
   const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks
     : (existing.rdFeedback ? [{ text: existing.rdFeedback, at: existing.rdFeedbackAt }] : []);
-  arr.push({ text, at: new Date().toISOString() });
+const overallCacheKey = `${studentId}_${day}_overall`;   const rdImgs = _rdPendingImgs[overallCacheKey] || [];   arr.push({ text, at: new Date().toISOString(), imgs: rdImgs.length ? rdImgs : undefined });   delete _rdPendingImgs[overallCacheKey];
   existing.rdFeedbacks = arr;
   existing.rdFeedback = text; // backward compat
   existing.rdFeedbackAt = new Date().toISOString();
@@ -1965,6 +1979,43 @@ function saveEditOverallFb(studentId, day) {
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
 
+async function uploadRdPhoto(file) {
+  const ext = file.type === 'image/png' ? 'png' : 'jpg';
+  const path = `rd/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const res = await fetch(`${SB_URL}/storage/v1/object/photos/${path}`, {
+    method: 'POST',
+    headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': file.type, 'x-upsert': 'true' },
+    body: file
+  });
+  if (!res.ok) throw new Error('上傳失敗');
+  return `${SB_URL}/storage/v1/object/public/photos/${path}`;
+}
+
+let _rdPendingImgs = {};
+
+async function handleRdImgUpload(event, type, studentId, day, mealKey) {
+  const files = Array.from(event.target.files);
+  if (!files.length) return;
+  event.target.value = '';
+  showToast('📤 上傳中…');
+  const cacheKey = type === 'meal' ? `${studentId}_${day}_${mealKey}` : `${studentId}_${day}_overall`;
+  if (!_rdPendingImgs[cacheKey]) _rdPendingImgs[cacheKey] = [];
+  for (const file of files) {
+    try {
+      const url = await uploadRdPhoto(file);
+      _rdPendingImgs[cacheKey].push(url);
+    } catch(e) { showToast('⚠️ 上傳失敗'); }
+  }
+  showToast(`✅ 已上傳 ${files.length} 張，送出回饋時會一起傳送`);
+  // 更新預覽
+  const previewId = type === 'meal' ? `rd-img-preview-${mealKey}` : `rd-img-preview-overall`;
+  const preview = document.getElementById(previewId);
+  if (preview) {
+    preview.innerHTML = _rdPendingImgs[cacheKey].map(src =>
+      `<img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">`
+    ).join('');
+  }
+}
 function saveMealFeedback(studentId, day, mealKey) {
   const input = document.getElementById(`meal-fb-${mealKey}`);
   const text = input?.value?.trim();
@@ -1972,7 +2023,7 @@ function saveMealFeedback(studentId, day, mealKey) {
   const existing = gs(`food_${studentId}_${day}`) || {};
   const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks']
     : (existing[mealKey + '_rdFeedback'] ? [{ text: existing[mealKey + '_rdFeedback'], at: existing[mealKey + '_rdFeedbackAt'] }] : []);
-  arr.push({ text, at: new Date().toISOString() });
+const mealCacheKey = `${studentId}_${day}_${mealKey}`;   const rdMealImgs = _rdPendingImgs[mealCacheKey] || [];   arr.push({ text, at: new Date().toISOString(), imgs: rdMealImgs.length ? rdMealImgs : undefined });   delete _rdPendingImgs[mealCacheKey];
   existing[mealKey + '_rdFeedbacks'] = arr;
   existing[mealKey + '_rdFeedback'] = text;
   existing[mealKey + '_rdFeedbackAt'] = new Date().toISOString();
