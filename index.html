@@ -1982,15 +1982,35 @@ function saveEditOverallFb(studentId, day) {
 }
 
 async function uploadRdPhoto(file) {
-  const ext = file.type === 'image/png' ? 'png' : 'jpg';
-  const path = `rd/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-  const res = await fetch(`${SB_URL}/storage/v1/object/photos/${path}`, {
-    method: 'POST',
-    headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': file.type, 'x-upsert': 'true' },
-    body: file
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const blobUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX = 900;
+      let w = img.width, h = img.height;
+      if (w > h && w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+      else if (h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(blobUrl);
+      canvas.toBlob(async (blob) => {
+        try {
+          const ext = 'jpg';
+          const path = `rd/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+          const res = await fetch(`${SB_URL}/storage/v1/object/photos/${path}`, {
+            method: 'POST',
+            headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+            body: blob
+          });
+          if (!res.ok) throw new Error('上傳失敗');
+          resolve(`${SB_URL}/storage/v1/object/public/photos/${path}`);
+        } catch(e) { reject(e); }
+      }, 'image/jpeg', 0.75);
+    };
+    img.onerror = () => reject(new Error('讀取失敗'));
+    img.src = blobUrl;
   });
-  if (!res.ok) throw new Error('上傳失敗');
-  return `${SB_URL}/storage/v1/object/public/photos/${path}`;
 }
 
 let _rdPendingImgs = {};
@@ -2012,7 +2032,15 @@ async function handleRdImgUpload(event, type, studentId, day, mealKey) {
   const previewId = type === 'meal' ? `rd-img-preview-${mealKey}` : `rd-img-preview-overall`;
   const preview = document.getElementById(previewId);
   if (preview) {
-    preview.innerHTML = _rdPendingImgs[cacheKey].map(src =>
+if (preview) {
+    preview.innerHTML = _rdPendingImgs[cacheKey].map((src, i) =>
+      `<div style="position:relative;width:60px;height:60px;flex-shrink:0">
+        <img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">
+        <button onclick="removeRdPendingImg('${cacheKey}',${i},'${previewId}')"
+          style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#ef4444;color:#fff;border:none;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;padding:0">✕</button>
+      </div>`
+    ).join('');
+  }
       `<img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">`
     ).join('');
   }
@@ -2034,12 +2062,32 @@ async function handleRdPaste(event, type, studentId, day, mealKey) {
       _rdPendingImgs[cacheKey].push(url);
     } catch(e) { showToast('⚠️ 上傳失敗'); }
   }
+
+  function removeRdPendingImg(cacheKey, idx, previewId) {
+  if (_rdPendingImgs[cacheKey]) {
+    _rdPendingImgs[cacheKey].splice(idx, 1);
+    const preview = document.getElementById(previewId);
+    if (preview) {
+      preview.innerHTML = _rdPendingImgs[cacheKey].map((src, i) =>
+        `<div style="position:relative;width:60px;height:60px;flex-shrink:0">
+          <img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">
+          <button onclick="removeRdPendingImg('${cacheKey}',${i},'${previewId}')"
+            style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#ef4444;color:#fff;border:none;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;padding:0">✕</button>
+        </div>`
+      ).join('');
+    }
+  }
+}
   showToast(`✅ 已貼上圖片，送出回饋時會一起傳送`);
   const previewId = type === 'meal' ? `rd-img-preview-${mealKey}` : `rd-img-preview-overall`;
   const preview = document.getElementById(previewId);
   if (preview) {
-    preview.innerHTML = _rdPendingImgs[cacheKey].map(src =>
-      `<img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">`
+    preview.innerHTML = _rdPendingImgs[cacheKey].map((src, i) =>
+      `<div style="position:relative;width:60px;height:60px;flex-shrink:0">
+        <img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">
+        <button onclick="removeRdPendingImg('${cacheKey}',${i},'${previewId}')"
+          style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#ef4444;color:#fff;border:none;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;padding:0">✕</button>
+      </div>`
     ).join('');
   }
 }
