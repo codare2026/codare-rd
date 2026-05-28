@@ -1621,7 +1621,8 @@ ${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bott
           <textarea id="meal-fb-${m.key}" rows="1" placeholder="回覆${m.label}…"
             style="flex:1;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')}"             
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')}"
+            onpaste="handleRdPaste(event,'meal','${s.id}','${selectedFeedbackDay}','${m.key}')"
             oninput="localStorage.setItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}', this.value)"             
             >${localStorage.getItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}') || ''}</textarea>
           <button style="width:36px;height:36px;border-radius:50%;background:var(--teal);border:none;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background 0.15s"
@@ -1760,7 +1761,8 @@ ${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bott
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
             style="width:100%;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveFeedback('${s.id}','${selectedFeedbackDay}')}"             
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveFeedback('${s.id}','${selectedFeedbackDay}')}"      
+            onpaste="handleRdPaste(event,'overall','${s.id}','${selectedFeedbackDay}',null)"
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"             
             >${localStorage.getItem('draft_overall_${s.id}_${selectedFeedbackDay}') || ''}</textarea>
           <div style="display:flex;justify-content:flex-end;margin-top:6px">
@@ -2007,7 +2009,32 @@ async function handleRdImgUpload(event, type, studentId, day, mealKey) {
     } catch(e) { showToast('⚠️ 上傳失敗'); }
   }
   showToast(`✅ 已上傳 ${files.length} 張，送出回饋時會一起傳送`);
-  // 更新預覽
+  const previewId = type === 'meal' ? `rd-img-preview-${mealKey}` : `rd-img-preview-overall`;
+  const preview = document.getElementById(previewId);
+  if (preview) {
+    preview.innerHTML = _rdPendingImgs[cacheKey].map(src =>
+      `<img src="${src}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--g2)">`
+    ).join('');
+  }
+}
+
+async function handleRdPaste(event, type, studentId, day, mealKey) {
+  const items = Array.from(event.clipboardData?.items || []);
+  const imgItems = items.filter(item => item.type.startsWith('image/'));
+  if (!imgItems.length) return;
+  event.preventDefault();
+  showToast('📤 貼上圖片上傳中…');
+  const cacheKey = type === 'meal' ? `${studentId}_${day}_${mealKey}` : `${studentId}_${day}_overall`;
+  if (!_rdPendingImgs[cacheKey]) _rdPendingImgs[cacheKey] = [];
+  for (const item of imgItems) {
+    const file = item.getAsFile();
+    if (!file) continue;
+    try {
+      const url = await uploadRdPhoto(file);
+      _rdPendingImgs[cacheKey].push(url);
+    } catch(e) { showToast('⚠️ 上傳失敗'); }
+  }
+  showToast(`✅ 已貼上圖片，送出回饋時會一起傳送`);
   const previewId = type === 'meal' ? `rd-img-preview-${mealKey}` : `rd-img-preview-overall`;
   const preview = document.getElementById(previewId);
   if (preview) {
