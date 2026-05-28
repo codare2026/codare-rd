@@ -1538,8 +1538,22 @@ function renderFeedback() {
   }).join('');
 
   const food = gs(`food_${s.id}_${selectedFeedbackDay}`) || null;
+  const wGroups2 = buildWeekGroups(buildStudentDates(s.start, s.end));
+    const wi2 = wGroups2.findIndex(wg => wg.dates.includes(selectedFeedbackDay));
+    const curWeek2 = wi2 >= 0 ? wi2 + 1 : 1;
+    const dayPlan = gs(`wplan_${s.id}_${curWeek2}`) || {};
+    const mealPlanMap2 = {
+      breakfast: dayPlan.breakfast || '',
+      snack1: '',
+      lunch: dayPlan.lunch || '',
+      snack2: dayPlan.snack || '',
+      dinner: dayPlan.dinner || '',
+      latenight: ''
+    };
 
   let contentHTML = '';
+    const planBanner = dayPlan.calories ? `<div style="background:var(--teal-light);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--teal-dark);font-weight:600">🍽️ 本日熱量目標：${dayPlan.calories}${dayPlan.total ? '　份數：' + dayPlan.total : ''}</div>` : '';
+  
   if (!food || (!food.breakfast && !food.lunch && !food.dinner && !food.notified)) {
     contentHTML = `<div class="empty-placeholder"><div class="ei">🍽️</div><p>學員尚未上傳 ${selectedFeedbackDay} 的飲食紀錄</p></div>`;
   } else {
@@ -1609,7 +1623,7 @@ function renderFeedback() {
         </div>`;
 
       return `<div class="meal-block" style="margin-bottom:8px;padding:14px;background:var(--g0);border-radius:12px">
-        <div style="font-size:12px;font-weight:700;color:var(--g5);background:var(--g1);padding:4px 10px;border-radius:6px;display:inline-block;margin-bottom:12px">${m.label}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g5);background:var(--g0);padding:4px 10px;border-radius:6px;display:inline-block;margin-bottom:12px">${m.label}${mealPlanMap2[m.key] ? `<span style="font-size:11px;font-weight:400;color:var(--teal);margin-left:8px">${mealPlanMap2[m.key]}</span>` : ''}</div>
         ${chatBubbles}
       </div>`;
     }).filter(Boolean).join('');
@@ -1653,6 +1667,7 @@ function renderFeedback() {
       </div>`).join('');
 
     contentHTML = `
+      ${planBanner}
       ${mealBlocks || '<div class="text-muted" style="padding:12px 0">飲食內容為空</div>'}
       ${lifeItems.length ? `<div class="life-chips">${lifeItems.map(x => `<span class="life-chip">${x.icon} ${x.label}：${x.val}</span>`).join('')}</div>` : ''}
       ${food.moodScore !== undefined && food.moodScore !== null ? (() => {
