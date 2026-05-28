@@ -1681,7 +1681,7 @@ function renderFeedback() {
           if (!all.length) return '<div style="color:var(--g3);font-size:13px;padding:8px 0;text-align:center">尚未有整日總結</div>';
           const sName = getStudentName(feedbackStudentId);
           return all.map((msg, mi) => {
-  const realFbIdx = msg.role === 'rd' ? (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks : []).indexOf(msg) : -1;
+  const realFbIdx = msg.role === 'rd' ? (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks : []).findIndex(fb => fb.at === msg.at && fb.text === msg.text) : -1;
   const isUnread = msg.role === 'stu' && (!food.rdRepliesReadAt || food.rdRepliesReadAt < msg.at);
             if (msg.role === 'rd') {
               return `<div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:10px">
