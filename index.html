@@ -240,7 +240,7 @@ function showNewReplyToast(name, studentId, day, text) {
         style="background:none;border:none;color:#94a3b8;font-size:18px;cursor:pointer;padding:0;line-height:1;flex-shrink:0">✕</button>
     </div>
     <div style="display:flex;gap:8px;margin-top:12px">
-      <button onclick="feedbackStudentId='${studentId}';selectedFeedbackDay='${day}';showSection('feedback');document.getElementById('reply-toast').remove()"
+      <button onclick="feedbackStudentId='${studentId}';selectedFeedbackDay='${day}';showSection('feedback');document.getElementById('reply-toast').remove();setTimeout(()=>{const el=document.querySelector('.rd-unread-msg');if(el)el.scrollIntoView({behavior:'smooth',block:'center'})},400)"
         style="flex:1;padding:7px;background:#0d9488;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">
         立即查看 →
       </button>
@@ -1621,7 +1621,7 @@ ${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bott
           <textarea id="meal-fb-${m.key}" rows="1" placeholder="回覆${m.label}…"
             style="flex:1;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')}"
+            onkeydown=""
             onpaste="handleRdPaste(event,'meal','${s.id}','${selectedFeedbackDay}','${m.key}')"
             oninput="localStorage.setItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}', this.value)"             
             >${localStorage.getItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}') || ''}</textarea>
@@ -1734,7 +1734,7 @@ ${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bott
                 <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0">${(currentRD?.name||'師').charAt(0)}</div>
               </div>`;
             } else {
-              return `<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
+              return `<div class="${isUnread ? 'rd-unread-msg' : ''}" style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
                 <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${sName.charAt(0)}</div>
                 <div style="max-width:75%">
                   <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${sName}
@@ -1761,7 +1761,7 @@ ${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bott
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
             style="width:100%;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveFeedback('${s.id}','${selectedFeedbackDay}')}"      
+            onkeydown=""   
             onpaste="handleRdPaste(event,'overall','${s.id}','${selectedFeedbackDay}',null)"
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"             
             >${localStorage.getItem('draft_overall_${s.id}_${selectedFeedbackDay}') || ''}</textarea>
