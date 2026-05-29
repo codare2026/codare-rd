@@ -1554,7 +1554,7 @@ function renderFeedback() {
   let contentHTML = '';
     const planBanner = dayPlan.calories ? `<div style="background:var(--teal-light);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--teal-dark);font-weight:600">🍽️ 本日熱量目標：${dayPlan.calories}${dayPlan.total ? '　份數：' + dayPlan.total : ''}</div>` : '';
   
-  if (!food || (!food.breakfast && !food.lunch && !food.dinner && !food.notified)) {
+  if (!food || (!food.breakfast && !food.lunch && !food.dinner && !food.snack1 && !food.snack2 && !food.latenight && !food.notified && !food.hasData)) {
     contentHTML = `<div class="empty-placeholder"><div class="ei">🍽️</div><p>學員尚未上傳 ${selectedFeedbackDay} 的飲食紀錄</p></div>`;
   } else {
     const meals = [
