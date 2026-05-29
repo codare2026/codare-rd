@@ -1572,8 +1572,14 @@ function renderFeedback() {
 
       // LINE 風格：學員訊息靠左，營養師回饋靠右，輸入框在最底
       const stuRepliesForMeal = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
-        .filter(r => r.text?.startsWith(`【${m.label}】`))
-        .map(r => ({ ...r, role: 'stu', text: r.text.replace(`【${m.label}】`, '').trim() }));
+        .filter(r => {
+          const mealLabelMap = { breakfast:'早餐', snack1:'上午點心', lunch:'午餐', snack2:'下午點心', dinner:'晚餐', latenight:'宵夜' };
+          return r.text?.startsWith(`【${mealLabelMap[m.key]}】`);
+        })
+        .map(r => {
+          const mealLabelMap = { breakfast:'早餐', snack1:'上午點心', lunch:'午餐', snack2:'下午點心', dinner:'晚餐', latenight:'宵夜' };
+          return { ...r, role: 'stu', text: r.text.replace(`【${mealLabelMap[m.key]}】`, '').trim() };
+        });
       const rdFbForMeal = mealFbArr.map(fb => ({ ...fb, role: 'rd' }));
       const mealFirstMsg = { role: 'first', text, imgs, at: food[m.key + '_at'] || '' };
       const mealAllMsgs = [mealFirstMsg, ...rdFbForMeal, ...stuRepliesForMeal].sort((a, b) => new Date(a.at||0) - new Date(b.at||0));
@@ -1645,7 +1651,8 @@ function renderFeedback() {
           <textarea id="meal-fb-${m.key}" rows="1" placeholder="回覆${m.label}…"
             style="flex:1;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}')}"
+            onkeydown=""
+            oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"
             onpaste="handleRdPaste(event,'meal','${s.id}','${selectedFeedbackDay}','${m.key}')"
             oninput="localStorage.setItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}', this.value)"             
             >${localStorage.getItem('draft_meal_${s.id}_${selectedFeedbackDay}_${m.key}') || ''}</textarea>
@@ -1785,7 +1792,8 @@ function renderFeedback() {
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
             style="width:100%;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();saveFeedback('${s.id}','${selectedFeedbackDay}')}"      
+            onkeydown=""
+            oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"      
             onpaste="handleRdPaste(event,'overall','${s.id}','${selectedFeedbackDay}',null)"
             oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"             
             >${localStorage.getItem('draft_overall_${s.id}_${selectedFeedbackDay}') || ''}</textarea>
