@@ -1571,6 +1571,10 @@ function renderFeedback() {
         : (food[m.key + '_rdFeedback'] ? [{ text: food[m.key + '_rdFeedback'], at: food[m.key + '_rdFeedbackAt'] }] : []);
 
       // LINE 風格：學員訊息靠左，營養師回饋靠右，輸入框在最底
+      const stuRepliesForMeal = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
+        .filter(r => r.text?.startsWith(`【${m.label}】`))
+        .map(r => ({ ...r, text: r.text.replace(`【${m.label}】`, '').trim() }));
+
       const chatBubbles = `
         <!-- 學員訊息（靠左） -->
         <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
@@ -1581,6 +1585,31 @@ function renderFeedback() {
             ${text ? `<div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;color:var(--g7);line-height:1.7;display:inline-block;max-width:100%">${text}</div>` : ''}
           </div>
         </div>
+        ${(() => {
+          const stuReplies = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
+            .filter(r => r.text?.startsWith(`【${m.label}】`))
+            .map(r => ({ ...r, text: r.text.replace(`【${m.label}】`, '').trim() }));
+          return stuReplies.map(r => `
+            <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;margin-top:8px">
+              <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
+              <div style="max-width:75%">
+                <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}
+                  <span style="margin-left:4px">${r.at ? new Date(r.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : ''}</span>
+                </div>
+                <div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;color:var(--g7)">${r.text}</div>
+              </div>
+            </div>`).join('');
+        })()}
+        ${stuRepliesForMeal.map(r => `
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
+          <div style="max-width:75%">
+            <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}
+              <span style="margin-left:4px">${r.at ? new Date(r.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : ''}</span>
+            </div>
+            <div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;color:var(--g7)">${r.text}</div>
+          </div>
+        </div>`).join('')}
 
         <!-- 營養師回饋（靠右） -->
         ${mealFbArr.map((fb, fi) => `
