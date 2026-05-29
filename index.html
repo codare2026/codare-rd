@@ -1573,32 +1573,63 @@ function renderFeedback() {
       // LINE 風格：學員訊息靠左，營養師回饋靠右，輸入框在最底
       const stuRepliesForMeal = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
         .filter(r => r.text?.startsWith(`【${m.label}】`))
-        .map(r => ({ ...r, text: r.text.replace(`【${m.label}】`, '').trim() }));
+        .map(r => ({ ...r, role: 'stu', text: r.text.replace(`【${m.label}】`, '').trim() }));
+      const rdFbForMeal = mealFbArr.map(fb => ({ ...fb, role: 'rd' }));
+      const mealFirstMsg = { role: 'first', text, imgs, at: food[m.key + '_at'] || '' };
+      const mealAllMsgs = [mealFirstMsg, ...rdFbForMeal, ...stuRepliesForMeal].sort((a, b) => new Date(a.at||0) - new Date(b.at||0));
 
-      const chatBubbles = `
-        <!-- 學員訊息（靠左） -->
+      const chatBubbles = mealAllMsgs.map(msg => {
+        if (msg.role === 'first') {
+          return `
         <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
           <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
           <div style="max-width:75%">
             <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}</div>
-            ${imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">${imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:120px;height:120px;object-fit:cover;border-radius:10px;cursor:pointer;border:1px solid var(--g2)">`).join('')}</div>` : ''}
-            ${text ? `<div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;color:var(--g7);line-height:1.7;display:inline-block;max-width:100%">${text}</div>` : ''}
+            ${msg.imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">${msg.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:120px;height:120px;object-fit:cover;border-radius:10px;cursor:pointer;border:1px solid var(--g2)">`).join('')}</div>` : ''}
+            ${msg.text ? `<div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;color:var(--g7);line-height:1.7;display:inline-block;max-width:100%">${msg.text}</div>` : ''}
           </div>
-        </div>
-        ${(() => {
-          const stuReplies = (Array.isArray(food.studentReplies) ? food.studentReplies : [])
-            .filter(r => r.text?.startsWith(`【${m.label}】`))
-            .map(r => ({ ...r, text: r.text.replace(`【${m.label}】`, '').trim() }));
-          return stuReplies.map(r => `
-            <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;margin-top:8px">
-              <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
-              <div style="max-width:75%">
-                <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}
-                  <span style="margin-left:4px">${r.at ? new Date(r.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : ''}</span>
-                </div>
-                <div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;color:var(--g7)">${r.text}</div>
+        </div>`;
+        } else if (msg.role === 'stu') {
+          return `
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
+          <div style="max-width:75%">
+            <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}
+              <span style="margin-left:4px">${msg.at ? new Date(msg.at).toLocaleString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : ''}</span>
+            </div>
+            <div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;color:var(--g7)">${msg.text}</div>
+          </div>
+        </div>`;
+        } else {
+          const fi = mealFbArr.indexOf(mealFbArr.find(fb => fb.at === msg.at && fb.text === msg.text));
+          return `
+        <div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:8px">
+          <div style="max-width:75%;text-align:right">
+            <div style="font-size:11px;color:var(--g4);margin-bottom:3px;text-align:right">${currentRD?.name || '營養師'}
+              <span style="margin-left:6px;color:var(--g3)">${msg.at ? new Date(msg.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
+            </div>
+            <div id="meal-edit-wrap-${m.key}-${fi}" style="display:none;margin-bottom:4px">
+              <textarea id="meal-edit-ta-${m.key}-${fi}" rows="2" style="width:220px;border:1.5px solid var(--teal);border-radius:8px;padding:7px 10px;font-size:12px;font-family:inherit;resize:none;outline:none;text-align:left">${msg.text}</textarea>
+              <div style="display:flex;gap:5px;margin-top:3px;justify-content:flex-end">
+                <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('meal-edit-wrap-${m.key}-${fi}').style.display='none';document.getElementById('meal-bubble-${m.key}-${fi}').style.display=''">取消</button>
+                <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditMealFbInline('${s.id}','${selectedFeedbackDay}','${m.key}',${fi})">更新</button>
               </div>
-            </div>`).join('');
+            </div>
+            <div id="meal-bubble-${m.key}-${fi}" style="display:inline-flex;flex-direction:column;align-items:flex-end">
+              ${msg.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;justify-content:flex-end">${msg.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:100px;height:100px;object-fit:cover;border-radius:8px;cursor:pointer">`).join('')}</div>` : ''}
+              <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;text-align:left;white-space:pre-wrap">${msg.text}</div>
+              <div style="display:flex;gap:4px;margin-top:4px">
+                <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
+                  onclick="document.getElementById('meal-edit-wrap-${m.key}-${fi}').style.display='';document.getElementById('meal-bubble-${m.key}-${fi}').style.display='none'">✏️</button>
+                <button style="background:none;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
+                  onclick="deleteMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}',${fi})">🗑️</button>
+              </div>
+            </div>
+          </div>
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0">${(currentRD?.name||'師').charAt(0)}</div>
+        </div>`;
+        }
+      }).join('') + `
         })()}
         ${stuRepliesForMeal.map(r => `
         <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
@@ -1609,33 +1640,6 @@ function renderFeedback() {
             </div>
             <div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;color:var(--g7)">${r.text}</div>
           </div>
-        </div>`).join('')}
-
-        <!-- 營養師回饋（靠右） -->
-        ${mealFbArr.map((fb, fi) => `
-        <div style="display:flex;align-items:flex-start;gap:8px;justify-content:flex-end;margin-bottom:8px">
-          <div style="max-width:75%;text-align:right">
-            <div style="font-size:11px;color:var(--g4);margin-bottom:3px;text-align:right">${currentRD?.name || '營養師'}
-              <span style="margin-left:6px;color:var(--g3)">${fb.at ? new Date(fb.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'}) : ''}</span>
-            </div>
-            <div id="meal-edit-wrap-${m.key}-${fi}" style="display:none;margin-bottom:4px">
-              <textarea id="meal-edit-ta-${m.key}-${fi}" rows="2" style="width:220px;border:1.5px solid var(--teal);border-radius:8px;padding:7px 10px;font-size:12px;font-family:inherit;resize:none;outline:none;text-align:left">${fb.text}</textarea>
-              <div style="display:flex;gap:5px;margin-top:3px;justify-content:flex-end">
-                <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="document.getElementById('meal-edit-wrap-${m.key}-${fi}').style.display='none';document.getElementById('meal-bubble-${m.key}-${fi}').style.display=''">取消</button>
-                <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveEditMealFbInline('${s.id}','${selectedFeedbackDay}','${m.key}',${fi})">更新</button>
-              </div>
-            </div>
-            <div id="meal-bubble-${m.key}-${fi}" style="display:inline-flex;flex-direction:column;align-items:flex-end">
-${fb.imgs?.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;justify-content:flex-end">${fb.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:100px;height:100px;object-fit:cover;border-radius:8px;cursor:pointer">`).join('')}</div>` : ''}               <div style="background:var(--teal);color:#fff;border-radius:12px 0 12px 12px;padding:10px 13px;font-size:13px;line-height:1.7;text-align:left;white-space:pre-wrap">${fb.text}</div>
-              <div style="display:flex;gap:4px;margin-top:4px">
-                <button style="background:none;border:1px solid var(--teal);color:var(--teal);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
-                  onclick="document.getElementById('meal-edit-wrap-${m.key}-${fi}').style.display='';document.getElementById('meal-bubble-${m.key}-${fi}').style.display='none'">✏️</button>
-                <button style="background:none;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer;font-size:10px;padding:1px 7px;font-family:inherit"
-                  onclick="deleteMealFeedback('${s.id}','${selectedFeedbackDay}','${m.key}',${fi})">🗑️</button>
-              </div>
-            </div>
-          </div>
-          <div style="width:32px;height:32px;border-radius:50%;background:var(--teal);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0">${(currentRD?.name||'師').charAt(0)}</div>
         </div>`).join('')}
 
         <!-- 輸入框 -->
