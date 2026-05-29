@@ -1789,7 +1789,7 @@ function renderFeedback() {
             <div id="rd-img-preview-overall" style="display:flex;gap:4px;flex-wrap:wrap"></div>
           </div>
           <textarea id="fb-input" rows="1" placeholder="新增一則整日總結…"   
-            oninput="localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
+            oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';localStorage.setItem('draft_overall_${s.id}_${selectedFeedbackDay}', this.value)"
             style="width:100%;border:1.5px solid var(--g2);border-radius:20px;padding:8px 14px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.5;max-height:80px"
             onfocus="this.style.borderColor='var(--teal)'" onblur="this.style.borderColor='var(--g2)'"
             onkeydown=""
