@@ -3516,7 +3516,8 @@ ${(() => {
           <div style="width:32px;height:32px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;font-size:14px;background:${hasEx ? 'var(--teal)' : 'var(--g1)'};color:${hasEx ? '#fff' : 'var(--g3)'}">
             ${hasEx ? '🏃' : '—'}
           </div>
-          ${hasEx ? `<div style="font-size:10px;color:var(--teal);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40px">${f.exType}${f.exMin ? ' '+f.exMin+'分' : ''}</div>` : ''}
+          ${hasEx ? `<div style="font-size:10px;color:var(--teal);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40px">${f.exType}</div>
+          <div style="font-size:10px;color:var(--g4);margin-top:1px">${f.exMin ? f.exMin+'分' : ''}</div>` : ''}
         </div>`;
       }).join('');
       const exCount = wg.dates.filter(d => {
