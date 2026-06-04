@@ -149,7 +149,7 @@ async function warmCache() {
       `${SB_URL}/rest/v1/cd?updated_at=gt.${encodeURIComponent(lastSync)}&select=key,value&limit=500&order=updated_at`
     );
     save(rows);
-    if (rows.length > 0) localStorage.setItem(lastSyncKey, now);
+    localStorage.setItem(lastSyncKey, now);
   } else {
     // 第一次登入：完整同步本 RD 相關資料
     // Step 1: 抓 RD 本身資料 + 所有 dynuser_（找出本 RD 的學員）
