@@ -1216,6 +1216,7 @@ async function syncRdData() {
   try {
     const rdId = currentRD?.id || '';
     localStorage.removeItem('cd_last_sync_rd_' + rdId);
+    await new Promise(r => setTimeout(r, 1500)); // 等寫入完成
     await warmCache();
     showToast('✅ 資料已同步！');
     document.getElementById('main-content').innerHTML = (
