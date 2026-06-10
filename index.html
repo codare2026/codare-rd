@@ -81,18 +81,52 @@ async function uploadToStorage(dataUrl, fileName, folder) {
 }
 
 // ── Supabase 寫入（使用 upsert 確保跨裝置同步） ──
+const _pendingWrites = {};
+
 async function sbWrite(key, val) {
   try {
     if (val === null) {
       await fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}`, { method: 'DELETE', headers: SB_HDRS });
     } else {
-      await fetch(`${SB_URL}/rest/v1/cd`, {
+      const res = await fetch(`${SB_URL}/rest/v1/cd`, {
         method: 'POST',
         headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify({ key, value: val, updated_at: new Date().toISOString() })
       });
+      if (!res.ok) throw new Error('write failed');
     }
-  } catch(e) { console.warn('Supabase write error:', e.message); }
+    delete _pendingWrites[key];
+    try { localStorage.removeItem('cd_pending_' + key); } catch {}
+  } catch(e) {
+    console.warn('寫入失敗，加入待寫入隊列:', key);
+    _pendingWrites[key] = { val, at: new Date().toISOString() };
+    try { localStorage.setItem('cd_pending_' + key, JSON.stringify({ val, at: new Date().toISOString() })); } catch {}
+  }
+}
+
+async function flushPendingWrites() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('cd_pending_')) {
+        const key = k.slice('cd_pending_'.length);
+        if (!_pendingWrites[key]) {
+          try { _pendingWrites[key] = JSON.parse(localStorage.getItem(k)); } catch {}
+        }
+      }
+    }
+  } catch {}
+
+  const keys = Object.keys(_pendingWrites);
+  if (!keys.length) return;
+
+  showToast(`🔄 補寫 ${keys.length} 筆離線資料中…`);
+  for (const key of keys) {
+    const { val } = _pendingWrites[key];
+    await sbWrite(key, val);
+    await new Promise(r => setTimeout(r, 50));
+  }
+  showToast('✅ 離線資料已全部同步！');
 }
 
 // ── 從 localStorage 預載 cache（瞬間啟動） ──
@@ -129,9 +163,14 @@ async function warmCache() {
   };
 
   const save = (rows) => rows.forEach(({ key, value }) => {
-    if (!key) return;
-    _cache[key] = value;
-    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
+   if (!key) return;
+   // 如果這筆資料在 pending queue 裡，代表本機版本比 Supabase 新，不要覆蓋！
+   if (_pendingWrites[key]) {
+     console.log('跳過覆蓋，本機有更新版本:', key);
+     return;
+   }
+   _cache[key] = value;
+   try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
     if (key.startsWith('rduser_')) {
       const rid = key.replace('rduser_', '');
       if (typeof DYNAMIC_RD_USERS !== 'undefined') DYNAMIC_RD_USERS[rid] = value;
@@ -1007,6 +1046,11 @@ function launchRdApp() {
     ws.onerror = () => {};
     ws.onclose = () => {};
   } catch(e) {}
+  window.addEventListener('online', async () => {
+    showToast('🌐 網路已恢復，同步離線資料中…');
+    await flushPendingWrites();
+  });
+  setTimeout(flushPendingWrites, 2000);
   showSection('dashboard');
   // 每 60 秒自動偵測學員新回覆
   setInterval(async () => {
@@ -3506,7 +3550,7 @@ ${(() => {
     return wGroups2.map((wg, wi) => {
       const weekDays = wg.dates.map(d => {
         const f = gs(`food_${s.id}_${d}`);
-        const hasEx = f && f.exType && f.exType.trim();
+        const NO_EX_WORDS = /^(無|沒有|no|x)$/i; const hasEx = f && f.exType && f.exType.trim() && !NO_EX_WORDS.test(f.exType.trim());
         const [m, day] = d.split('/');
         const dt = new Date(new Date().getFullYear(), m-1, day);
         const dayName = ['日','一','二','三','四','五','六'][dt.getDay()];
@@ -3514,11 +3558,10 @@ ${(() => {
         return `<div style="flex:1;text-align:center">
           <div style="font-size:11px;color:var(--g4);margin-bottom:4px">週${dayName}</div>
           <div style="font-size:10px;color:var(--g3);margin-bottom:4px">${d}</div>
-          <div style="width:32px;height:32px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;font-size:14px;background:${hasEx ? 'var(--teal)' : 'var(--g1)'};color:${hasEx ? '#fff' : 'var(--g3)'}">
-            ${hasEx ? '🏃' : '—'}
+          <div style="width:32px;height:32px;border-radius:50%;margin:0 auto;background:${hasEx ? 'var(--teal)' : 'var(--g1)'}">
           </div>
-          ${hasEx ? `<div style="font-size:10px;color:var(--teal);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40px">${f.exType}</div>
-          <div style="font-size:10px;color:var(--g4);margin-top:1px">${f.exMin ? f.exMin+'分' : ''}</div>` : ''}
+          ${hasEx ? `<div style="font-size:11px;color:var(--teal);margin-top:4px;text-align:center;font-weight:700;word-break:break-all;white-space:normal">${f.exType}</div>
+          <div style="font-size:10px;color:var(--g4);margin-top:1px;text-align:center">${f.exMin ? f.exMin+'分' : ''}</div>` : ''}
         </div>`;
       }).join('');
       const exCount = wg.dates.filter(d => {
@@ -3656,16 +3699,16 @@ function renderWeekplan() {
   <div class="card">
     <div class="card-title">📅 W${wpWeek} 基本設定 <span style="font-size:12px;font-weight:400;color:var(--g4)">${autoDate}</span></div>
     <div class="fld-row">
-      <div class="fld"><label>日期範圍</label><input type="text" id="wp-date" value="${plan.date || autoDate}" placeholder="自動填入"></div>
+      <div class="fld"><label>日期範圍${wpWeek > 1 ? `<button onclick="copyPrevWeekField('date')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><input type="text" id="wp-date" value="${plan.date || autoDate}" placeholder="自動填入"></div>
       <div class="fld"><label>熱量設定（大卡）${wpWeek > 1 ? `<button onclick="copyPrevWeekField('cal')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><input type="number" id="wp-cal" value="${plan.calories ? plan.calories.replace(/[^0-9]/g,'') : ''}" placeholder="1600" inputmode="numeric"></div>
     </div>
     <div class="fld-row3">
-      <div class="fld"><label>體重 kg</label><input type="number" id="wp-wt" value="${plan.weight || ''}" placeholder="--" step="0.1"></div>
-      <div class="fld"><label>體脂 %</label><input type="number" id="wp-fat" value="${plan.fat || ''}" placeholder="--" step="0.1"></div>
-      <div class="fld"><label>腰圍 cm</label><input type="number" id="wp-waist" value="${plan.waist || ''}" placeholder="--" step="0.1"></div>
+      <div class="fld"><label>體重 kg${wpWeek > 1 ? `<button onclick="copyPrevWeekField('wt')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><input type="number" id="wp-wt" value="${plan.weight || ''}" placeholder="--" step="0.1"></div>
+      <div class="fld"><label>體脂 %${wpWeek > 1 ? `<button onclick="copyPrevWeekField('fat')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><input type="number" id="wp-fat" value="${plan.fat || ''}" placeholder="--" step="0.1"></div>
+      <div class="fld"><label>腰圍 cm${wpWeek > 1 ? `<button onclick="copyPrevWeekField('waist')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><input type="number" id="wp-waist" value="${plan.waist || ''}" placeholder="--" step="0.1"></div>
     </div>
     <div class="fld">
-      <label>📹 視訊 / 電話課程時間（學員首頁行事曆會顯示）</label>
+      <label>📹 視訊 / 電話課程時間（學員首頁行事曆會顯示）${wpWeek > 1 ? `<button onclick="copyPrevWeekField('session')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label>
       <input type="text" id="wp-session" value="${plan.session || ''}" placeholder="例：2026/06/04（四）晚上 8:00 視訊課程 30 分鐘">
     </div>
   </div>
@@ -3728,7 +3771,6 @@ function renderWeekplan() {
 
   <div class="card">
     <div class="card-title">🏃 運動與備註</div>
-    <div class="fld"><label>熱量設定（大卡）${wpWeek > 1 ? `<button onclick="copyPrevWeekField('cal')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><input type="number" id="wp-cal" value="${plan.calories ? plan.calories.replace(/[^0-9]/g,'') : ''}" placeholder="1600" inputmode="numeric"></div>
     <div class="fld"><label>運動建議${wpWeek > 1 ? `<button onclick="copyPrevWeekField('ex')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><textarea id="wp-ex" placeholder="例：每週至少運動 3 天，每次 30 分鐘有氧或重訓">${plan.exercise || ''}</textarea></div>
     <div class="fld"><label>備註（飲水、睡眠、其他注意事項）</label><textarea id="wp-note" placeholder="例：每天飲水至少 1500ml，睡前 2 小時不進食…">${plan.note || ''}</textarea></div>
   </div>
@@ -3843,6 +3885,21 @@ function copyPrevWeekField(field) {
   } else if (field === 'ex') {
     const el = document.getElementById('wp-ex');
     if (el) el.value = prevPlan.exercise || '';
+  } else if (field === 'date') {
+    const el = document.getElementById('wp-date');
+    if (el) el.value = prevPlan.date || '';
+  } else if (field === 'wt') {
+    const el = document.getElementById('wp-wt');
+    if (el) el.value = prevPlan.weight || '';
+  } else if (field === 'fat') {
+    const el = document.getElementById('wp-fat');
+    if (el) el.value = prevPlan.fat || '';
+  } else if (field === 'waist') {
+    const el = document.getElementById('wp-waist');
+    if (el) el.value = prevPlan.waist || '';
+  } else if (field === 'session') {
+    const el = document.getElementById('wp-session');
+    if (el) el.value = prevPlan.session || '';
   }
   showToast('✅ 已複製上週內容');
 }
