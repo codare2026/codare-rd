@@ -3772,7 +3772,7 @@ function renderWeekplan() {
   <div class="card">
     <div class="card-title">🏃 運動與備註</div>
     <div class="fld"><label>運動建議${wpWeek > 1 ? `<button onclick="copyPrevWeekField('ex')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><textarea id="wp-ex" placeholder="例：每週至少運動 3 天，每次 30 分鐘有氧或重訓">${plan.exercise || ''}</textarea></div>
-    <div class="fld"><label>備註（飲水、睡眠、其他注意事項）</label><textarea id="wp-note" placeholder="例：每天飲水至少 1500ml，睡前 2 小時不進食…">${plan.note || ''}</textarea></div>
+    <div class="fld"><label>備註（飲水、睡眠、其他注意事項）${wpWeek > 1 ? `<button onclick="copyPrevWeekField('note')" style="margin-left:8px;font-size:11px;color:var(--teal);background:none;border:1px solid var(--teal);border-radius:4px;padding:1px 7px;cursor:pointer;font-family:inherit">複製上週</button>` : ''}</label><textarea id="wp-note" placeholder="例：每天飲水至少 1500ml，睡前 2 小時不進食…">${plan.note || ''}</textarea></div>
   </div>
 
   <div style="display:flex;justify-content:flex-end;gap:8px">
@@ -3900,6 +3900,9 @@ function copyPrevWeekField(field) {
   } else if (field === 'session') {
     const el = document.getElementById('wp-session');
     if (el) el.value = prevPlan.session || '';
+  } else if (field === 'note') {
+    const el = document.getElementById('wp-note');
+    if (el) el.value = prevPlan.note || '';
   }
   showToast('✅ 已複製上週內容');
 }
