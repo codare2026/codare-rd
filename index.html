@@ -1103,18 +1103,24 @@ function doRdLogout() {
         document.getElementById('rd-loading-screen').style.display = 'none';
         document.getElementById('login-screen').style.display = 'none';
         launchRdApp();
-        setTimeout(async () => {
-            try {
-              await warmCache();
-              updateBadge();
-              const el = document.getElementById('main-content');
-              if (el && currentSection) {
-                const r = { dashboard: renderDashboard, feedback: renderFeedback,
-                  students: renderStudentsPage, menu: renderMenuMgr, materials: renderMaterials };
-                if (r[currentSection]) el.innerHTML = r[currentSection]();
-              }
-            } catch(e) { console.warn('auto bg sync failed:', e.message); }
-          }, 300);
+setTimeout(async () => {
+    try {
+      await warmCache();
+      updateBadge();
+      // 等 showSection 的渲染完成後才更新，確保排在最後不被蓋掉
+      setTimeout(() => {
+        const el = document.getElementById('main-content');
+        if (el && currentSection) {
+          const r = { dashboard: renderDashboard, feedback: renderFeedback,
+            students: renderStudentsPage, weekplan: renderWeekplan,
+            bodytrack: renderBodyTrack, menu: renderMenuMgr,
+            materials: renderMaterials, accounts: renderAccounts, report: renderReport };
+          if (r[currentSection]) el.innerHTML = r[currentSection]();
+          updateBadge();
+        }
+      }, 200);
+    } catch(e) { console.warn('auto bg sync failed:', e.message); }
+  }, 600);
         return;
       }
       // 找不到就顯示登入畫面
