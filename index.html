@@ -104,6 +104,26 @@ async function sbWrite(key, val) {
   }
 }
 
+// ── 確認寫入是否真正成功（給重要操作用，會回傳 true/false） ──
+async function sbWriteConfirmed(key, val) {
+  try {
+    const res = await fetch(`${SB_URL}/rest/v1/cd`, {
+      method: 'POST',
+      headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
+      body: JSON.stringify({ key, value: val, updated_at: new Date().toISOString() })
+    });
+    if (!res.ok) throw new Error('write failed: ' + res.status);
+    delete _pendingWrites[key];
+    try { localStorage.removeItem('cd_pending_' + key); } catch {}
+    return true;
+  } catch(e) {
+    console.warn('寫入失敗，加入待寫入隊列:', key, e.message);
+    _pendingWrites[key] = { val, at: new Date().toISOString() };
+    try { localStorage.setItem('cd_pending_' + key, JSON.stringify({ val, at: new Date().toISOString() })); } catch {}
+    return false;
+  }
+}
+
 async function flushPendingWrites() {
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -1923,9 +1943,12 @@ function renderFeedback() {
     ${contentHTML}
     ${food && (food.hasData || food.notified) ? `
     <div class="divider" style="margin-top:20px"></div>
-    <div style="display:flex;justify-content:flex-end">
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
       <button class="btn btn-outline" onclick="exportDailyDiary('${feedbackStudentId}','${selectedFeedbackDay}')" style="gap:6px">
         📸 匯出當日紀錄（JPG）
+      </button>
+      <button class="btn btn-teal" onclick="exportDailyDiaryWithFeedback('${feedbackStudentId}','${selectedFeedbackDay}')" style="gap:6px">
+        📋 匯出紀錄＋營養師回饋
       </button>
     </div>` : ''}
   </div>`;
@@ -2002,13 +2025,12 @@ function pushInbox(studentId, msg) {
 }
 
 // 標記 RD 已查看並清除紅點（含學員回覆）
-function markRdViewed(studentId, day) {
+async function markRdViewed(studentId, day) {
   const key = `food_${studentId}_${day}`;
   const existing = gs(key);
   if (!existing) return;
   let changed = false;
   if (!existing.rdViewed) { existing.rdViewed = true; existing.rdViewedAt = new Date().toISOString(); changed = true; }
-  // 標記學員回覆已讀
   const replies = Array.isArray(existing.studentReplies) ? existing.studentReplies : [];
   if (replies.length) {
     const lastAt = replies[replies.length-1].at;
@@ -2017,10 +2039,14 @@ function markRdViewed(studentId, day) {
       changed = true;
     }
   }
-  if (changed) ss(key, existing);
+  if (changed) {
+    _cache[key] = existing;
+    try { localStorage.setItem('cd_' + key, JSON.stringify(existing)); } catch {}
+    await sbWriteConfirmed(key, existing);
+  }
 }
 
-function saveFeedback(studentId, day) {
+async function saveFeedback(studentId, day) {
   const text = document.getElementById('fb-input')?.value?.trim();
   if (!text) { showToast('請先輸入回覆內容'); return; }
   const existing = gs(`food_${studentId}_${day}`) || {};
@@ -2033,15 +2059,22 @@ const overallCacheKey = `${studentId}_${day}_overall`;   const rdImgs = _rdPendi
   existing.rdViewed = true;  // 送出回覆即標記已讀，紅點消失
   existing.rdViewedAt = new Date().toISOString();
   existing.rdRepliesReadAt = new Date().toISOString();
-  ss(`food_${studentId}_${day}`, existing);
+  const key = `food_${studentId}_${day}`;
+  _cache[key] = existing;
+  try { localStorage.setItem('cd_' + key, JSON.stringify(existing)); } catch {}
   document.getElementById('fb-input').value = '';
-  showToast('✅ 總結回覆已送出！');   
   localStorage.removeItem(`draft_overall_${studentId}_${day}`);
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
-  // 推播通知學員
-  const stuName = getActiveStudents().find(s => s.id === studentId)?.name || '學員';
-  sendPushToStudent(studentId, `💬 營養師回覆了你的飲食日記`, `${currentRD.name} 已回覆你 ${day} 的飲食紀錄，快去看看！`);
+
+  const ok = await sbWriteConfirmed(key, existing);
+  if (ok) {
+    showToast('✅ 總結回覆已送出並確認雲端儲存！');
+    const stuName = getActiveStudents().find(s => s.id === studentId)?.name || '學員';
+    sendPushToStudent(studentId, `💬 營養師回覆了你的飲食日記`, `${currentRD.name} 已回覆你 ${day} 的飲食紀錄，快去看看！`);
+  } else {
+    showToast('⚠️ 雲端儲存失敗，已存於本機，將自動重試');
+  }
 }
 
 function startEditOverallFb(idx, text) {
@@ -2179,7 +2212,7 @@ function removeRdPendingImg(cacheKey, idx, previewId) {
     }
   }
 }
-function saveMealFeedback(studentId, day, mealKey) {
+async function saveMealFeedback(studentId, day, mealKey) {
   const input = document.getElementById(`meal-fb-${mealKey}`);
   const text = input?.value?.trim();
   if (!text) { showToast('請先輸入回饋內容'); return; }
@@ -2193,12 +2226,20 @@ const mealCacheKey = `${studentId}_${day}_${mealKey}`;   const rdMealImgs = _rdP
   existing.rdViewed = true;
   existing.rdViewedAt = new Date().toISOString();
   existing.rdRepliesReadAt = new Date().toISOString();
-  ss(`food_${studentId}_${day}`, existing);
-  showToast('✅ 餐別回饋已送出！');   
+  const key = `food_${studentId}_${day}`;
+  _cache[key] = existing;
+  try { localStorage.setItem('cd_' + key, JSON.stringify(existing)); } catch {}
   localStorage.removeItem(`draft_meal_${studentId}_${day}_${mealKey}`);
   if (input) input.value = '';
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
+
+  const ok = await sbWriteConfirmed(key, existing);
+  if (ok) {
+    showToast('✅ 餐別回饋已送出並確認雲端儲存！');
+  } else {
+    showToast('⚠️ 雲端儲存失敗，已存於本機，將自動重試');
+  }
 }
 
 function startEditMealFb(mealKey, idx, text) {
@@ -2280,20 +2321,22 @@ function deleteOverallFeedback(studentId, day, idx) {
   updateBadge();
 }
 
-function notifyFeedbackDone(studentId, day) {
+async function notifyFeedbackDone(studentId, day) {
   const existing = gs(`food_${studentId}_${day}`) || {};
   existing.rdFeedbackDone = true;
   existing.rdFeedbackDoneAt = new Date().toISOString();
-  ss(`food_${studentId}_${day}`, existing);
-  // Push to student inbox
+  const key = `food_${studentId}_${day}`;
+  _cache[key] = existing;
+  try { localStorage.setItem('cd_' + key, JSON.stringify(existing)); } catch {}
   pushInbox(studentId, {
     type: 'feedback',
     title: '🥦 營養師已完成飲食回饋！',
     body: `${day} 的飲食回饋已完成，點此查看`,
     day
   });
-  showToast('📣 已通知學員回饋完成！');
   document.getElementById('main-content').innerHTML = renderFeedback();
+  const ok = await sbWriteConfirmed(key, existing);
+  showToast(ok ? '📣 已通知學員回饋完成！' : '⚠️ 通知失敗，將自動重試');
 }
 
 // ── 常用語句管理 ──
@@ -2737,6 +2780,12 @@ function renderIntakeCard(id) {
         onchange="saveStudentInfo('${id}')">
     </div>
     <div class="intake-row">
+      <span class="intake-label">目前是第幾期</span>
+      <input type="number" id="edit-period-${id}" value="${s.period || 1}" min="1"
+        style="width:80px;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;font-family:inherit;outline:none"
+        onchange="saveStudentInfo('${id}')">
+    </div>
+    <div class="intake-row">
       <span class="intake-label">本期目標</span>
       <input type="text" id="edit-goal-${id}" value="${s.goal||''}" placeholder="例：體重從 68kg 降至 65kg"
         style="flex:1;border:1.5px solid var(--g2);border-radius:6px;padding:5px 8px;font-size:13px;font-family:inherit;outline:none"
@@ -3165,30 +3214,32 @@ async function submitAddStudent() {
 }
 
 function saveStudentInfo(studentId) {
-  const startEl = document.getElementById(`edit-start-${studentId}`);
-  const endEl   = document.getElementById(`edit-end-${studentId}`);
-  const goalEl  = document.getElementById(`edit-goal-${studentId}`);
+  const startEl  = document.getElementById(`edit-start-${studentId}`);
+  const endEl    = document.getElementById(`edit-end-${studentId}`);
+  const goalEl   = document.getElementById(`edit-goal-${studentId}`);
+  const periodEl = document.getElementById(`edit-period-${studentId}`);
   if (!startEl) return;
 
-  const start = startEl.value.replace(/-/g, '/');
-  const end   = endEl?.value?.replace(/-/g, '/') || '';
-  const goal  = goalEl?.value?.trim() || '';
+  const start  = startEl.value.replace(/-/g, '/');
+  const end    = endEl?.value?.replace(/-/g, '/') || '';
+  const goal   = goalEl?.value?.trim() || '';
+  const period = periodEl?.value ? Number(periodEl.value) : 1;
 
-  // Update in-memory STUDENTS_DB
   if (STUDENTS_DB[studentId]) {
-    STUDENTS_DB[studentId].start = start;
-    STUDENTS_DB[studentId].end   = end;
-    STUDENTS_DB[studentId].goal  = goal;
+    STUDENTS_DB[studentId].start  = start;
+    STUDENTS_DB[studentId].end    = end;
+    STUDENTS_DB[studentId].goal   = goal;
+    STUDENTS_DB[studentId].period = period;
   }
 
-  // Merge into dynuser data and save to Firebase + localStorage
-  // This syncs to the student app (student reads dynuser on login)
   const dyn = gs(`dynuser_${studentId}`) || {};
-  dyn.start = start;
-  dyn.end   = end;
-  dyn.goal  = goal;
+  dyn.start  = start;
+  dyn.end    = end;
+  dyn.goal   = goal;
+  dyn.period = period;
   if (window._cache) _cache[`dynuser_${studentId}`] = dyn;
-  ss(`dynuser_${studentId}`, dyn);  // Supabase 同步，學員下次同步即看到
+  ss(`dynuser_${studentId}`, dyn); 
+  // Supabase 同步，學員下次同步即看到
 
   showToast('✅ 課程資訊已更新！學員重新同步後日期即更新');
 
@@ -3597,14 +3648,17 @@ ${(() => {
   </div>`;
 }
 
-function markBodyNotifSeen(studentId) {
+async function markBodyNotifSeen(studentId) {
   const notif = gs(`body_notif_${studentId}`) || {};
   notif.rdSeen = true;
   notif.rdSeenAt = new Date().toISOString();
-  ss(`body_notif_${studentId}`, notif);
-  showToast('✅ 已確認');
+  const key = `body_notif_${studentId}`;
+  _cache[key] = notif;
+  try { localStorage.setItem('cd_' + key, JSON.stringify(notif)); } catch {}
   document.getElementById('main-content').innerHTML = renderBodyTrack();
   updateBadge();
+  const ok = await sbWriteConfirmed(key, notif);
+  showToast(ok ? '✅ 已確認' : '⚠️ 確認失敗，將自動重試');
 }
 
 function switchBtStudent(id) {
@@ -5235,6 +5289,126 @@ function buildExportDOM(s, day, food) {
       ${mealRows || '<div style="text-align:center;padding:24px;color:#94a3b8;font-size:14px">無飲食紀錄</div>'}
     </div>
     ${lifeHTML}
+    <div style="margin-top:20px;text-align:center;font-size:12px;color:#94a3b8">
+      Co-Dare 口袋營養獅 ・ 匯出時間：${new Date().toLocaleString('zh-TW')}
+    </div>`;
+  return wrap;
+}
+
+async function exportDailyDiaryWithFeedback(studentId, day) {
+  const s = getActiveStudents().find(x => x.id === studentId) || { name: studentId };
+  const food = gs(`food_${studentId}_${day}`) || {};
+  showLoading('產生圖片中…');
+  let el;
+  try {
+    el = buildExportDOMWithFeedback(s, day, food);
+    document.body.appendChild(el);
+    if (!window.html2canvas) {
+      await new Promise((res, rej) => {
+        const sc = document.createElement('script');
+        sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        sc.onload = res; sc.onerror = rej;
+        document.head.appendChild(sc);
+      });
+    }
+    const imgs = Array.from(el.querySelectorAll('img'));
+    await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(r => { img.onload = r; img.onerror = r; })));
+    await new Promise(r => setTimeout(r, 400));
+    const canvas = await window.html2canvas(el, {
+      scale: 2, useCORS: true, allowTaint: true,
+      backgroundColor: '#f8fafc', logging: false,
+      width: el.offsetWidth, height: el.offsetHeight
+    });
+    document.body.removeChild(el);
+    const link = document.createElement('a');
+    link.download = `${s.name}_${day.replace(/\//g,'-')}_完整紀錄含回饋.jpg`;
+    link.href = canvas.toDataURL('image/jpeg', 0.93);
+    link.click();
+    hideLoading();
+    showToast('✅ 已匯出！');
+  } catch(e) {
+    try { if (el) document.body.removeChild(el); } catch {}
+    hideLoading();
+    showToast('⚠️ 匯出失敗：' + e.message);
+  }
+}
+
+function buildExportDOMWithFeedback(s, day, food) {
+  const meals = [
+    { key: 'breakfast', label: '🌅 早餐' },
+    { key: 'snack1',    label: '🍪 點心（上午）' },
+    { key: 'lunch',     label: '☀️ 午餐' },
+    { key: 'snack2',    label: '🍎 點心（下午）' },
+    { key: 'dinner',    label: '🌙 晚餐' },
+    { key: 'latenight', label: '🌃 宵夜' }
+  ];
+  const moodEmoji = n => n <= 3 ? '😔' : n <= 6 ? '😐' : '😊';
+  const moodColor = n => n <= 3 ? '#ef4444' : n <= 6 ? '#f59e0b' : '#22c55e';
+
+  const mealRows = meals.map(m => {
+    const text = food[m.key] || '';
+    const imgs = food[m.key + '_imgs'] || [];
+    const fbArr = Array.isArray(food[m.key + '_rdFeedbacks']) ? food[m.key + '_rdFeedbacks']
+      : (food[m.key + '_rdFeedback'] ? [{ text: food[m.key + '_rdFeedback'] }] : []);
+    if (!text && !imgs.length && !fbArr.length) return '';
+    const imgHTML = imgs.map(src =>
+      `<img src="${src}" crossorigin="anonymous" style="width:200px;height:200px;object-fit:cover;border-radius:12px;border:2px solid #e2e8f0;flex-shrink:0">`
+    ).join('');
+    const fbHTML = fbArr.map(fb =>
+      `<div style="margin-top:8px;background:#0d9488;color:#fff;border-radius:10px;padding:10px 14px;font-size:14px;line-height:1.7;white-space:pre-wrap">👩‍⚕️ ${fb.text}</div>`
+    ).join('');
+    return `
+    <div style="margin-bottom:20px;padding-bottom:20px;border-bottom:1px solid #e2e8f0">
+      <div style="font-size:15px;font-weight:700;color:#0f766e;margin-bottom:10px">${m.label}</div>
+      ${imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px">${imgHTML}</div>` : ''}
+      ${text ? `<div style="font-size:15px;color:#334155;line-height:1.8;background:#f8fafc;padding:10px 14px;border-radius:8px;border-left:3px solid #0d9488">${text}</div>` : ''}
+      ${fbHTML}
+    </div>`;
+  }).filter(Boolean).join('');
+
+  const lifeData = [
+    food.exType ? `🏃 運動：${food.exType}${food.exMin ? ' ' + food.exMin + '分鐘' : ''}` : '',
+    food.water  ? `💧 飲水：${food.water} ml` : '',
+    food.sleep  ? `😴 睡眠：${food.sleep} 小時` : '',
+    food.poop   ? `🚽 排便：${food.poop} 次` : '',
+  ].filter(Boolean);
+  const hasMood = food.moodScore !== undefined && food.moodScore !== null;
+  const moodHTML = hasMood ? `
+    <div style="display:inline-flex;align-items:center;gap:8px;background:${moodColor(food.moodScore)}18;padding:8px 14px;border-radius:20px;margin-top:8px">
+      <span style="font-size:22px">${moodEmoji(food.moodScore)}</span>
+      <span style="font-size:15px;font-weight:700;color:${moodColor(food.moodScore)}">心情 ${food.moodScore} 分</span>
+      ${food.moodNote ? `<span style="font-size:13px;color:#64748b">　${food.moodNote}</span>` : ''}
+    </div>` : '';
+  const lifeHTML = (lifeData.length || hasMood || food.lifeNote) ? `
+    <div style="margin-top:16px;padding:16px;background:#f0fdf9;border-radius:12px;border:1.5px solid #99f6e4">
+      <div style="font-size:14px;font-weight:700;color:#0f766e;margin-bottom:10px">📝 生活細節</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        ${lifeData.map(t => `<span style="background:#fff;border:1px solid #ccfbf1;border-radius:20px;padding:5px 14px;font-size:14px;color:#334155">${t}</span>`).join('')}
+      </div>
+      ${moodHTML}
+      ${food.lifeNote ? `<div style="margin-top:10px;font-size:14px;color:#475569;line-height:1.7;padding:10px;background:#fff;border-radius:8px">📒 ${food.lifeNote}</div>` : ''}
+    </div>` : '';
+
+  const overallArr = Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks
+    : (food.rdFeedback ? [{ text: food.rdFeedback }] : []);
+  const overallHTML = overallArr.length ? `
+    <div style="margin-top:16px;padding:16px;background:#fff;border-radius:12px;border:1.5px solid #e2e8f0">
+      <div style="font-size:14px;font-weight:700;color:#0f766e;margin-bottom:10px">📝 整日總結回饋</div>
+      ${overallArr.map(fb => `<div style="background:#0d9488;color:#fff;border-radius:10px;padding:12px 14px;font-size:14px;line-height:1.8;white-space:pre-wrap;margin-bottom:8px">${fb.text}</div>`).join('')}
+    </div>` : '';
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;left:-9999px;top:0;width:700px;background:#f8fafc;font-family:\'Noto Sans TC\',sans-serif;padding:32px;';
+  wrap.innerHTML = `
+    <div style="background:linear-gradient(135deg,#0d9488,#0f766e);padding:24px 28px;border-radius:16px;margin-bottom:24px;color:#fff">
+      <div style="font-size:22px;font-weight:900;margin-bottom:4px">🦁 Co-Dare 完整紀錄＋營養師回饋</div>
+      <div style="font-size:16px;opacity:0.9">${s.name} ・ ${day}</div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:24px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
+      ${mealRows || '<div style="text-align:center;padding:24px;color:#94a3b8;font-size:14px">無飲食紀錄</div>'}
+    </div>
+    ${lifeHTML}
+    ${overallHTML}
     <div style="margin-top:20px;text-align:center;font-size:12px;color:#94a3b8">
       Co-Dare 口袋營養獅 ・ 匯出時間：${new Date().toLocaleString('zh-TW')}
     </div>`;
