@@ -1661,15 +1661,15 @@ function renderFeedback() {
 
       const chatBubbles = mealAllMsgs.map(msg => {
         if (msg.role === 'first') {
-          return `
-        <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
-          <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
-          <div style="max-width:75%">
-            <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}</div>
-            ${msg.imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">${msg.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:120px;height:120px;object-fit:cover;border-radius:10px;cursor:pointer;border:1px solid var(--g2)">`).join('')}</div>` : ''}
-            ${msg.text ? `<div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;color:var(--g7);line-height:1.7;display:inline-block;max-width:100%">${msg.text}</div>` : ''}
-          </div>
-        </div>`;
+  return `
+  <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px">
+  <div style="width:32px;height:32px;border-radius:50%;background:var(--g2);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--g5);flex-shrink:0">${s.name.charAt(0)}</div>
+  <div style="max-width:75%">
+    <div style="font-size:11px;color:var(--g4);margin-bottom:3px">${s.name}${msg.at ? `<span style="margin-left:6px;color:var(--g3)">${new Date(msg.at).toLocaleTimeString('zh-TW',{hour:'2-digit',minute:'2-digit'})}</span>` : ''}</div>
+    ${msg.imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">${msg.imgs.map(src => `<img src="${src}" onclick="openLightbox('${src}')" style="width:120px;height:120px;object-fit:cover;border-radius:10px;cursor:pointer;border:1px solid var(--g2)">`).join('')}</div>` : ''}
+    ${msg.text ? `<div style="background:#fff;border:1.5px solid var(--g2);border-radius:0 12px 12px 12px;padding:10px 13px;font-size:13px;color:var(--g7);line-height:1.7;display:inline-block;max-width:100%">${msg.text}</div>` : ''}
+  </div>
+</div>`;
         } else if (msg.role === 'stu') {
           return `
         <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px">
@@ -1743,7 +1743,7 @@ function renderFeedback() {
     }).filter(Boolean).join('');
 
     const lifeItems = [
-      { icon: '🏃', label: '運動', val: food.exType ? `${food.exType}${food.exMin ? ' ' + food.exMin + '分鐘' : ''}` : null },
+      { icon: '🏃', label: '運動', val: food.exType ? `${food.exType}${food.exMin ? ' ' + food.exMin + '分鐘' : ''}${food.exTime ? '　' + food.exTime + ' 開始' : ''}` : null },
       { icon: '💧', label: '飲水', val: food.water ? food.water + 'ml' : null },
       { icon: '😴', label: '睡眠', val: food.sleep ? food.sleep + '小時' : null },
       { icon: '🚽', label: '排便', val: food.poop ? food.poop + '次' : null }
