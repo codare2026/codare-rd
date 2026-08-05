@@ -3367,6 +3367,49 @@ function sendIntakeFormModal(studentId) {
 // ══════════════════════════════════════
 let btStudentId = null;
 
+// ── 建立體態趨勢圖（可橫向滾動，體重/體脂/腰圍共用）──
+function buildTrendChart(prog, wGroups, field, unit, color, label) {
+  const data = prog.map(p => (p && p[field] !== undefined && p[field] !== null) ? p[field] : null);
+  const allVals = data.filter(v => v !== null && v !== undefined);
+  if (!allVals.length) return '';
+  const maxV = Math.max(...allVals);
+  const minV = Math.min(...allVals);
+  const range = (maxV - minV) || 1;
+  const stepX = 60;
+  const totalWeeks = wGroups.length || data.length;
+  const svgWidth = Math.max(280, 40 + totalWeeks * stepX);
+
+  const points = data.map((v, i) => {
+    const x = 20 + i * stepX;
+    const y = (v !== null && v !== undefined) ? 60 - ((v - minV) / range * 44) : null;
+    return { x, y, v };
+  });
+  const validPoints = points.filter(p => p.y !== null);
+  const line = validPoints.map((p, i) => i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`).join(' ');
+  const dots = validPoints.map(p =>
+    `<circle cx="${p.x}" cy="${p.y}" r="5" fill="${color}" stroke="#fff" stroke-width="2"/>
+     <text x="${p.x}" y="${p.y - 10}" text-anchor="middle" font-size="10" fill="var(--g5)">${p.v}${unit}</text>`
+  ).join('');
+  const labels = wGroups.map((wg, i) =>
+    `<text x="${20 + i * stepX}" y="78" text-anchor="middle" font-size="10" fill="var(--g4)">W${i+1}</text>`
+  ).join('');
+  const areaPath = validPoints.length
+    ? `${line} L${validPoints[validPoints.length-1].x},68 L${validPoints[0].x},68 Z`
+    : '';
+
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="card-title">📈 ${label}趨勢</div>
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px">
+      <svg width="${svgWidth}" height="90" viewBox="0 0 ${svgWidth} 90" style="overflow:visible;display:block">
+        ${validPoints.length ? `<polyline points="${validPoints.map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+        ${areaPath ? `<path d="${areaPath}" fill="${color}" opacity="0.08"/>` : ''}
+        ${dots}
+        ${labels}
+      </svg>
+    </div>
+  </div>`;
+}
+
 function renderBodyTrack() {
   const students = getActiveStudents();
   if (!btStudentId || !students.find(x => x.id === btStudentId)) {
@@ -3422,31 +3465,8 @@ function renderBodyTrack() {
   const diffF = (startF && latestF) ? (latestF.fat - startF).toFixed(1) : null;
   const remainW = (goalW && latestW) ? (latestW.weight - goalW).toFixed(1) : null;
 
-  // Mini sparkline data for weight
-  const wData = prog.map(p => p.weight || null);
-  const allW = wData.filter(Boolean);
-  const maxW = allW.length ? Math.max(...allW) : 70;
-  const minW = allW.length ? Math.min(...allW) : 60;
-  const range = (maxW - minW) || 1;
-
-  const sparkPoints = wData.map((w, i) => {
-    const x = 20 + i * 60;
-    const y = w ? 60 - ((w - minW) / range * 44) : null;
-    return { x, y, w };
-  });
-
-  const sparkLine = sparkPoints.filter(p => p.y !== null).map((p, i, arr) =>
-    i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`
-  ).join(' ');
-
-  const sparkDots = sparkPoints.filter(p => p.y !== null).map(p =>
-    `<circle cx="${p.x}" cy="${p.y}" r="5" fill="var(--teal)" stroke="#fff" stroke-width="2"/>
-     <text x="${p.x}" y="${p.y - 10}" text-anchor="middle" font-size="10" fill="var(--g5)">${p.w}kg</text>`
-  ).join('');
-
-  const sparkLabels = wGroups.map((wg, i) =>
-    `<text x="${20 + i*60}" y="78" text-anchor="middle" font-size="10" fill="var(--g4)">W${i+1}</text>`
-  ).join('');
+  // 是否有任何體重紀錄（用來判斷是否顯示圖表區塊）
+  const allW = prog.map(p => p.weight || null).filter(Boolean);
 
   // Table rows — editable inline
   const rows = prog.map((p, i) => `
@@ -3506,16 +3526,10 @@ function renderBodyTrack() {
     </div>
   </div>
 
-  <!-- Chart -->
-  ${allW.length > 0 ? `<div class="card" style="margin-bottom:16px">
-    <div class="card-title">📈 體重趨勢</div>
-    <svg width="100%" viewBox="0 0 280 90" style="overflow:visible">
-      <polyline points="${sparkPoints.filter(p=>p.y!==null).map(p=>`${p.x},${p.y}`).join(' ')}" fill="none" stroke="var(--teal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="${sparkLine} L${sparkPoints.filter(p=>p.y!==null).slice(-1)[0].x},68 L${sparkPoints.filter(p=>p.y!==null)[0].x},68 Z" fill="var(--teal)" opacity="0.08"/>
-      ${sparkDots}
-      ${sparkLabels}
-    </svg>
-  </div>` : ''}
+  <!-- Charts：體重／體脂／腰圍趨勢，皆可橫向滾動 -->
+  ${buildTrendChart(prog, wGroups, 'weight', 'kg', 'var(--teal)', '體重')}
+  ${buildTrendChart(prog, wGroups, 'fat', '%', '#f59e0b', '體脂')}
+  ${buildTrendChart(prog, wGroups, 'waist', 'cm', '#8b5cf6', '腰圍')}
 
   <!-- Per-week: data + plan side by side -->
   ${Array.from({ length: totalWeeks }, (_, i) => i).map(i => {
