@@ -4581,22 +4581,23 @@ function switchMatStudent(id) { matStudentId = id; pendingEncyFile = null; pendi
 
 async function addEncy(studentId) {
   const title = document.getElementById('ency-title')?.value?.trim();
-  const desc = getEncyDesc();   // selected option value = catKey or course_N
+  const descRaw = getEncyDesc();   // 一般分類回傳字串；自訂課程標題回傳 {val,label} 物件
   if (!title) { showToast('請選擇教材類型'); return; }
-  if (!desc) { showToast('請選擇說明/章節'); return; }
+  if (!descRaw) { showToast('請選擇說明/章節'); return; }
 
   const category = title === '線上教學影片' ? 'course' : 'ency';
-  // catKey is the stable routing key; desc is for display in RD table
-  const catKey = desc;  // e.g. 'food_grain', 'course_1'
+  // 統一取出字串型的 catKey 與 descLabel，避免自訂標題物件被當成字串誤存（會顯示 [object Object]）
+  const isCustomDesc = typeof descRaw === 'object' && descRaw !== null;
+  const catKey = isCustomDesc ? descRaw.val : descRaw;  // e.g. 'food_grain', 'course_1', 'course_custom_169...'
 
   // Human-readable label for RD table display
-  const descLabel = (() => {
+  const descLabel = isCustomDesc ? descRaw.label : (() => {
     if (category === 'course') {
-      const opt = ENCY_COURSE_OPTIONS.find(o => o.val === desc);
-      return opt ? opt.label : desc;
+      const opt = ENCY_COURSE_OPTIONS.find(o => o.val === catKey);
+      return opt ? opt.label : catKey;
     } else {
-      const opt = ENCY_FOOD_OPTIONS.find(o => o.val === desc);
-      return opt ? opt.label : desc;
+      const opt = ENCY_FOOD_OPTIONS.find(o => o.val === catKey);
+      return opt ? opt.label : catKey;
     }
   })();
 
