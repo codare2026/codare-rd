@@ -1045,12 +1045,48 @@ function launchRdApp() {
   if (adminSection) adminSection.style.display = currentRD.superAdmin ? '' : 'none';
   const mmAccounts = document.getElementById('mm-accounts');
   if (mmAccounts) mmAccounts.style.display = currentRD.superAdmin ? 'flex' : 'none';
-  // Realtime WebSocket
+  connectRealtime();
+  window.addEventListener('online', async () => {
+    showToast('🌐 網路已恢復，同步離線資料中…');
+    await flushPendingWrites();
+    resyncNow();
+  });
+  // 分頁切回前景時（例如手機切到背景一陣子後切回來），WebSocket 常常已經斷線
+  // 立刻補一次同步 + 檢查連線，確保回來當下看到的就是最新資料，而不是等下一次 60 秒輪詢
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (!_rtSocket || _rtSocket.readyState !== WebSocket.OPEN) connectRealtime();
+      resyncNow();
+    }
+  });
+  setTimeout(flushPendingWrites, 2000);
+  showSection('dashboard');
+  // 每 20 秒自動同步一次，當作 WebSocket 萬一斷線/漏接時的保險（跟學員端的輪詢頻率對齊）
+  setInterval(resyncNow, 20000);
+}
+
+function resyncNow() {
+  return (async () => {
+    try { await warmCache(); updateBadge(); checkNewStudentReplies(); } catch(e) {}
+  })();
+}
+
+// ── Realtime WebSocket（含自動斷線重連，避免手機切背景/網路抖動後就永久收不到即時通知）──
+let _rtSocket = null;
+let _rtReconnectDelay = 1000;
+let _rtReconnectTimer = null;
+function connectRealtime() {
+  if (_rtSocket && (_rtSocket.readyState === WebSocket.OPEN || _rtSocket.readyState === WebSocket.CONNECTING)) return;
+  clearTimeout(_rtReconnectTimer);
   try {
     const wsUrl = `${SB_URL.replace('https','wss')}/realtime/v1/websocket?apikey=${SB_KEY}&vsn=1.0.0`;
     const ws = new WebSocket(wsUrl);
+    _rtSocket = ws;
     ws.onopen = () => {
+      _rtReconnectDelay = 1000; // 連線成功就重置重試間隔
       ws.send(JSON.stringify({ topic: 'realtime:public:cd', event: 'phx_join', payload: {}, ref: '1' }));
+      // 重新連上時，補抓一次斷線期間可能漏接的變更
+      resyncNow();
     };
     ws.onmessage = (e) => {
       try {
@@ -1073,18 +1109,14 @@ function launchRdApp() {
       } catch(e) {}
     };
     ws.onerror = () => {};
-    ws.onclose = () => {};
+    ws.onclose = () => {
+      if (_rtSocket !== ws) return; // 已經被新的連線取代，忽略舊連線的關閉事件
+      _rtSocket = null;
+      // 指數退避重連（最長 30 秒），避免網路持續不通時瘋狂重試
+      _rtReconnectTimer = setTimeout(connectRealtime, _rtReconnectDelay);
+      _rtReconnectDelay = Math.min(_rtReconnectDelay * 2, 30000);
+    };
   } catch(e) {}
-  window.addEventListener('online', async () => {
-    showToast('🌐 網路已恢復，同步離線資料中…');
-    await flushPendingWrites();
-  });
-  setTimeout(flushPendingWrites, 2000);
-  showSection('dashboard');
-  // 每 60 秒自動偵測學員新回覆
-  setInterval(async () => {
-    try { await warmCache(); updateBadge(); checkNewStudentReplies(); } catch(e) {}
-  }, 60000);
 }
 
 function doRdLogout() {
@@ -1227,10 +1259,19 @@ function getActiveStudents() {
 // 判斷某天是否還有「學員已上傳但營養師尚未回覆」的餐次 —
 // 用來決定紅點是否要保留：只要有餐次沒回覆，紅點就該一直留著，不能因為營養師點開看過（rdViewed）就消失
 const FOOD_MEAL_KEYS = ['breakfast','snack1','lunch','snack2','dinner','latenight'];
+// 學員常會填「無」表示這餐沒吃/沒有要記錄，這種內容不需要營養師逐一回覆，
+// 不然紅點會因為「有內容但沒回覆」而永遠卡住消不掉
+const NO_REPLY_NEEDED_TEXTS = new Set(['無','无','沒吃','没吃','沒有','没有','未進食','無/沒吃','跳過','無紀錄']);
+function mealNeedsReply(text) {
+  const t = (text || '').trim();
+  if (!t) return false;
+  return !NO_REPLY_NEEDED_TEXTS.has(t);
+}
 function dayHasUnrepliedMeal(food) {
   if (!food) return false;
   return FOOD_MEAL_KEYS.some(k => {
-    const hasContent = !!(food[k] || (food[k + '_imgs'] && food[k + '_imgs'].length));
+    const hasImgs = food[k + '_imgs'] && food[k + '_imgs'].length;
+    const hasContent = hasImgs || mealNeedsReply(food[k]);
     if (!hasContent) return false;
     const hasFb = (Array.isArray(food[k + '_rdFeedbacks']) && food[k + '_rdFeedbacks'].length) || !!food[k + '_rdFeedback'];
     return !hasFb;
