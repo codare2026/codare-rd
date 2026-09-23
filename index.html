@@ -1058,6 +1058,8 @@ function launchRdApp() {
         if (msg.event === 'postgres_changes' || msg.event === 'INSERT' || msg.event === 'UPDATE') {
           const record = msg.payload?.record || msg.payload?.new;
           if (!record?.key) return;
+          // 該 key 正在寫入中，或本機有離線待補寫的新版本，代表本機比這則廣播新，不要蓋掉（否則會把剛送出的回饋沖銷掉）
+          if (_pendingWrites[record.key] || _inFlightWrites.has(record.key)) return;
           _cache[record.key] = record.value;
           try { localStorage.setItem('cd_' + record.key, JSON.stringify(record.value)); } catch {}
           updateBadge();
@@ -1222,14 +1224,26 @@ function getActiveStudents() {
     return status !== 'ended';
   });
 }
+// 判斷某天是否還有「學員已上傳但營養師尚未回覆」的餐次 —
+// 用來決定紅點是否要保留：只要有餐次沒回覆，紅點就該一直留著，不能因為營養師點開看過（rdViewed）就消失
+const FOOD_MEAL_KEYS = ['breakfast','snack1','lunch','snack2','dinner','latenight'];
+function dayHasUnrepliedMeal(food) {
+  if (!food) return false;
+  return FOOD_MEAL_KEYS.some(k => {
+    const hasContent = !!(food[k] || (food[k + '_imgs'] && food[k + '_imgs'].length));
+    if (!hasContent) return false;
+    const hasFb = (Array.isArray(food[k + '_rdFeedbacks']) && food[k + '_rdFeedbacks'].length) || !!food[k + '_rdFeedback'];
+    return !hasFb;
+  });
+}
 function countPendingFeedback() {
   let count = 0;
   getActiveStudents().forEach(s => {
     buildStudentDates(s.start, s.end).forEach(d => {
       const data = gs(`food_${s.id}_${d}`);
       if (!data) return;
-      // 未查看的飲食資料
-      if ((data.hasData || data.notified) && !data.rdViewed) { count++; return; }
+      // 有餐次還沒回覆
+      if (dayHasUnrepliedMeal(data)) { count++; return; }
       // 有未讀的學員回覆
       const replies = Array.isArray(data.studentReplies) ? data.studentReplies : [];
       const lastReplyAt = replies.length ? replies[replies.length-1].at : null;
@@ -1360,7 +1374,17 @@ function showSection(sec) {
     updateBadge();
     window.scrollTo(0, 0);
     // 週計畫頁面：渲染後立即計算整天合計
-    if (sec === 'weekplan') setTimeout(autoCalcTotal, 80);
+    if (sec === 'weekplan') {
+      setTimeout(autoCalcTotal, 80);
+      // 背景抓伺服器最新的週計畫／目標，避免本機快取過期時誤顯示「尚未設定」進而在儲存時蓋成空的
+      const sid = wpStudentId, wk = wpWeek;
+      if (sid) refreshWeekplan(sid, wk).then(() => {
+        if (currentSection === 'weekplan' && wpStudentId === sid && wpWeek === wk) {
+          document.getElementById('main-content').innerHTML = renderWeekplan();
+          setTimeout(autoCalcTotal, 80);
+        }
+      });
+    }
   }, 60);
 }
 
@@ -1537,7 +1561,7 @@ function renderFeedback() {
   const studentTabs = students.map(s => {
     const hasPending = buildStudentDates(s.start, s.end).some(d => {
       const f = gs(`food_${s.id}_${d}`);
-      if ((f?.hasData || f?.notified) && !f?.rdViewed) return true;
+      if (dayHasUnrepliedMeal(f)) return true;
       const reps = Array.isArray(f?.studentReplies) ? f.studentReplies : [];
       const lastAt = reps.length ? reps[reps.length-1].at : null;
       return lastAt && (!f.rdRepliesReadAt || f.rdRepliesReadAt < lastAt);
@@ -1605,7 +1629,7 @@ function renderFeedback() {
       const lastReplyAt = replies.length ? replies[replies.length-1].at : null;
       const hasUnreadReply = lastReplyAt && (!food.rdRepliesReadAt || food.rdRepliesReadAt < lastReplyAt);
       if (d === selectedFeedbackDay) cls += ' active';
-      else if ((hasContent && !food.rdViewed) || hasUnreadReply) cls += ' notified';
+      else if (dayHasUnrepliedMeal(food) || hasUnreadReply) cls += ' notified';
       else if (hasContent) cls += ' has-data';
       return `<button class="${cls}" onclick="selectFeedbackDay('${d}')">${d}${isToday ? '▸' : ''}</button>`;
     }).join('');
@@ -1965,23 +1989,26 @@ function switchFeedbackStudent(id) {
 }
 
 // 直接從 Supabase 抓特定學員特定天的最新資料（繞過增量快取）
+// 回傳目前已知最新的 value，供呼叫端在「讀取→修改→寫回」前先拿到最新版本，縮小跟學員端寫入互相覆蓋的競爭視窗
 async function refreshStudentDay(studentId, day) {
-  if (!studentId) return;
+  if (!studentId) return null;
+  const key = `food_${studentId}_${day}`;
   try {
     const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
-    const key = `food_${studentId}_${day}`;
-    const res = await fetch(
-      `${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}&select=key,value`,
-      { headers: GET_HDRS }
-    );
+    const res = await Promise.race([
+      fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}&select=key,value`, { headers: GET_HDRS }),
+      new Promise((_, r) => setTimeout(() => r(new Error('t')), 6000))
+    ]);
     if (res.ok) {
       const rows = await res.json();
-      if (rows[0]) {
+      // 若此 key 正在寫入中或有離線待補寫的資料，代表本機版本比伺服器新，不要用剛抓到的舊資料蓋過去
+      if (rows[0] && !_pendingWrites[key] && !_inFlightWrites.has(key)) {
         _cache[key] = rows[0].value;
         try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
       }
     }
   } catch(e) {}
+  return gs(key);
 }
 
 function selectFeedbackDay(d) {
@@ -2018,10 +2045,59 @@ function openFeedbackForStudent(id, day) {
   });
 }
 
-// ── 送入收件夾 helper ──
-function pushInbox(studentId, msg) {
+// 直接從 Supabase 抓特定學員的收件夾最新資料（繞過增量快取），理由同 refreshStudentDay：
+// 學員端也會讀改寫這個 key（標記已讀/刪除），寫入前先拿最新版本可縮小互相覆蓋的競爭視窗
+async function refreshInbox(studentId) {
   const key = `inbox_${studentId}`;
-  const arr = gs(key) || [];
+  try {
+    const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
+    const res = await Promise.race([
+      fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}&select=key,value`, { headers: GET_HDRS }),
+      new Promise((_, r) => setTimeout(() => r(new Error('t')), 6000))
+    ]);
+    if (res.ok) {
+      const rows = await res.json();
+      if (rows[0] && !_pendingWrites[key] && !_inFlightWrites.has(key)) {
+        _cache[key] = rows[0].value;
+        try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
+      }
+    }
+  } catch(e) {}
+  return gs(key);
+}
+
+// 通用版：直接從 Supabase 抓某個 key 的最新資料（繞過本機快取）
+// 用在「週計畫／每週小目標」這種可能因為換裝置、換分頁而本機快取還沒同步到最新版的地方，
+// 避免畫面誤判成「尚未設定」，導致儲存時把學員原本已存在的資料整包蓋成空的
+async function refreshKeyFromServer(key) {
+  try {
+    const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
+    const res = await Promise.race([
+      fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}&select=value`, { headers: GET_HDRS }),
+      new Promise((_, r) => setTimeout(() => r(new Error('t')), 6000))
+    ]);
+    if (res.ok) {
+      const rows = await res.json();
+      if (rows[0] && !_pendingWrites[key] && !_inFlightWrites.has(key)) {
+        _cache[key] = rows[0].value;
+        try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
+      }
+    }
+  } catch(e) {}
+  return gs(key);
+}
+
+async function refreshWeekplan(studentId, week) {
+  await Promise.all([
+    refreshKeyFromServer(`wplan_${studentId}_${week}`),
+    refreshKeyFromServer(`goals_${studentId}_${week}`)
+  ]);
+}
+
+// ── 送入收件夾 helper ──
+async function pushInbox(studentId, msg) {
+  const key = `inbox_${studentId}`;
+  const arr = (await refreshInbox(studentId)) || [];
   arr.push({ ...msg, at: new Date().toISOString(), read: false });
   // keep last 50
   if (arr.length > 50) arr.splice(0, arr.length - 50);
@@ -2053,7 +2129,7 @@ async function markRdViewed(studentId, day) {
 async function saveFeedback(studentId, day) {
   const text = document.getElementById('fb-input')?.value?.trim();
   if (!text) { showToast('請先輸入回覆內容'); return; }
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks
     : (existing.rdFeedback ? [{ text: existing.rdFeedback, at: existing.rdFeedbackAt }] : []);
 const overallCacheKey = `${studentId}_${day}_overall`;   const rdImgs = _rdPendingImgs[overallCacheKey] || [];   arr.push({ text, at: new Date().toISOString(), imgs: rdImgs.length ? rdImgs : undefined });   delete _rdPendingImgs[overallCacheKey];
@@ -2090,13 +2166,13 @@ function startEditOverallFb(idx, text) {
   wrap.style.display = 'block';
 }
 
-function saveEditOverallFb(studentId, day) {
+async function saveEditOverallFb(studentId, day) {
   const ta = document.getElementById('overall-edit-ta');
   if (!ta) return;
   const text = ta.value.trim();
   const idx = parseInt(ta.dataset.idx);
   if (!text) { showToast('內容不能為空'); return; }
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks : [];
   if (arr[idx]) { arr[idx].text = text; arr[idx].editedAt = new Date().toISOString(); }
   existing.rdFeedbacks = arr;
@@ -2220,7 +2296,7 @@ async function saveMealFeedback(studentId, day, mealKey) {
   const input = document.getElementById(`meal-fb-${mealKey}`);
   const text = input?.value?.trim();
   if (!text) { showToast('請先輸入回饋內容'); return; }
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks']
     : (existing[mealKey + '_rdFeedback'] ? [{ text: existing[mealKey + '_rdFeedback'], at: existing[mealKey + '_rdFeedbackAt'] }] : []);
 const mealCacheKey = `${studentId}_${day}_${mealKey}`;   const rdMealImgs = _rdPendingImgs[mealCacheKey] || [];   arr.push({ text, at: new Date().toISOString(), imgs: rdMealImgs.length ? rdMealImgs : undefined });   delete _rdPendingImgs[mealCacheKey];
@@ -2255,12 +2331,12 @@ function startEditMealFb(mealKey, idx, text) {
   wrap.style.display = 'block';
 }
 
-function saveEditMealFbInline(studentId, day, mealKey, fi) {
+async function saveEditMealFbInline(studentId, day, mealKey, fi) {
   const ta = document.getElementById(`meal-edit-ta-${mealKey}-${fi}`);
   if (!ta) return;
   const text = ta.value.trim();
   if (!text) { showToast('內容不能為空'); return; }
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks'] : [];
   if (arr[fi]) { arr[fi].text = text; arr[fi].editedAt = new Date().toISOString(); }
   existing[mealKey + '_rdFeedbacks'] = arr;
@@ -2269,12 +2345,12 @@ function saveEditMealFbInline(studentId, day, mealKey, fi) {
   showToast('✅ 已更新！');
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
-function saveEditOverallFbInline(studentId, day, fi) {
+async function saveEditOverallFbInline(studentId, day, fi) {
   const ta = document.getElementById(`overall-edit-ta-${fi}`);
   if (!ta) return;
   const text = ta.value.trim();
   if (!text) { showToast('內容不能為空'); return; }
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks : [];
   if (arr[fi]) { arr[fi].text = text; arr[fi].editedAt = new Date().toISOString(); }
   existing.rdFeedbacks = arr;
@@ -2283,13 +2359,13 @@ function saveEditOverallFbInline(studentId, day, fi) {
   showToast('✅ 已更新！');
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
-function saveEditMealFb(studentId, day, mealKey) {
+async function saveEditMealFb(studentId, day, mealKey) {
   const ta = document.getElementById(`meal-edit-ta-${mealKey}`);
   if (!ta) return;
   const text = ta.value.trim();
   const idx = parseInt(ta.dataset.idx);
   if (!text) { showToast('內容不能為空'); return; }
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks'] : [];
   if (arr[idx]) { arr[idx].text = text; arr[idx].editedAt = new Date().toISOString(); }
   existing[mealKey + '_rdFeedbacks'] = arr;
@@ -2299,8 +2375,8 @@ function saveEditMealFb(studentId, day, mealKey) {
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
 
-function deleteMealFeedback(studentId, day, mealKey, idx) {
-  const existing = gs(`food_${studentId}_${day}`) || {};
+async function deleteMealFeedback(studentId, day, mealKey, idx) {
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing[mealKey + '_rdFeedbacks']) ? existing[mealKey + '_rdFeedbacks'] : [];
   arr.splice(idx, 1);
   existing[mealKey + '_rdFeedbacks'] = arr;
@@ -2311,8 +2387,8 @@ function deleteMealFeedback(studentId, day, mealKey, idx) {
   updateBadge();
 }
 
-function deleteOverallFeedback(studentId, day, idx) {
-  const existing = gs(`food_${studentId}_${day}`) || {};
+async function deleteOverallFeedback(studentId, day, idx) {
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   const arr = Array.isArray(existing.rdFeedbacks) ? existing.rdFeedbacks : [];
   if (idx !== undefined) arr.splice(idx, 1);
   else arr.length = 0;
@@ -2326,7 +2402,7 @@ function deleteOverallFeedback(studentId, day, idx) {
 }
 
 async function notifyFeedbackDone(studentId, day) {
-  const existing = gs(`food_${studentId}_${day}`) || {};
+  const existing = (await refreshStudentDay(studentId, day)) || {};
   existing.rdFeedbackDone = true;
   existing.rdFeedbackDoneAt = new Date().toISOString();
   const key = `food_${studentId}_${day}`;
@@ -3667,10 +3743,11 @@ ${(() => {
 }
 
 async function markBodyNotifSeen(studentId) {
-  const notif = gs(`body_notif_${studentId}`) || {};
+  const key = `body_notif_${studentId}`;
+  // 學員可能剛好又送出新的體態通知，存檔前先抓最新版本，避免用舊快取蓋掉學員剛送出的通知
+  const notif = (await refreshKeyFromServer(key)) || {};
   notif.rdSeen = true;
   notif.rdSeenAt = new Date().toISOString();
-  const key = `body_notif_${studentId}`;
   _cache[key] = notif;
   try { localStorage.setItem('cd_' + key, JSON.stringify(notif)); } catch {}
   document.getElementById('main-content').innerHTML = renderBodyTrack();
@@ -3692,10 +3769,12 @@ function refreshBodyTrack(studentId) {
   window.scrollTo(0, 0);
 }
 
-function updateBtProg(el, studentId) {
+async function updateBtProg(el, studentId) {
   const i = parseInt(el.dataset.si);
   const f = el.dataset.sf;
-  const prog = gs(`progress_${studentId}`) || [{},{},{},{}];
+  // 學員也會在 App 自己記錄體重等數值、寫回同一筆資料，存檔前先抓伺服器最新版本再合併，
+  // 避免營養師這裡編輯時，用本機舊快取整包蓋掉學員剛記錄的數值
+  const prog = (await refreshKeyFromServer(`progress_${studentId}`)) || [{},{},{},{}];
   while (prog.length < 4) prog.push({});
   prog[i] = prog[i] || {};
   prog[i][f] = el.value ? parseFloat(el.value) : null;
@@ -3866,11 +3945,25 @@ function switchWpStudent(id) {
   wpStudentId = id; wpWeek = 1;
   document.getElementById('main-content').innerHTML = renderWeekplan();
   setTimeout(autoCalcTotal, 50);
+  // 背景抓伺服器最新的週計畫／目標，避免本機快取過期時顯示「尚未設定」
+  refreshWeekplan(id, wpWeek).then(() => {
+    if (wpStudentId === id) {
+      document.getElementById('main-content').innerHTML = renderWeekplan();
+      setTimeout(autoCalcTotal, 50);
+    }
+  });
 }
 function switchWpWeek(w) {
   wpWeek = w;
   document.getElementById('main-content').innerHTML = renderWeekplan();
   setTimeout(autoCalcTotal, 50);
+  const sid = wpStudentId;
+  refreshWeekplan(sid, w).then(() => {
+    if (wpStudentId === sid && wpWeek === w) {
+      document.getElementById('main-content').innerHTML = renderWeekplan();
+      setTimeout(autoCalcTotal, 50);
+    }
+  });
 }
 
 // ══════════════════════════════════════
@@ -4017,7 +4110,7 @@ function copyPrevWeekGoals() {
     </div>`).join('');
   showToast('✅ 已複製上週目標');
 }
-function saveWeekplan(studentId, week) {
+async function saveWeekplan(studentId, week) {
   const cal = document.getElementById('wp-cal')?.value;
   const plan = {
     date: document.getElementById('wp-date')?.value || '',
@@ -4036,11 +4129,14 @@ function saveWeekplan(studentId, week) {
   };
   ss(`wplan_${studentId}_${week}`, plan);
 
-  const goalInputs = document.querySelectorAll('[id^="wp-goal-"]');
-  const goals = Array.from(goalInputs).map((el, i) => {
-    const existing2 = gs(`goals_${studentId}_${week}`) || [];
-    return { text: el.value.trim(), done: existing2[i]?.done || false };
-  }).filter(g => g.text);
+  // 存檔前先抓伺服器最新的目標資料（學員也會在 App 打勾完成、寫回同一筆資料），
+  // 避免用舊快取蓋掉學員剛打的勾，也避免因本機快取過期而把已存在的目標誤蓋成空的
+  const freshGoals = await refreshKeyFromServer(`goals_${studentId}_${week}`) || [];
+  const goalInputs = document.querySelectorAll('#wp-goals-list [id^="wp-goal-"]');
+  const goals = Array.from(goalInputs).map((el, i) => ({
+    text: el.value.trim(),
+    done: freshGoals[i]?.done || false
+  })).filter(g => g.text);
   ss(`goals_${studentId}_${week}`, goals);
 
   showNotifyDialog(
