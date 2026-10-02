@@ -1021,7 +1021,7 @@ async function doRdLogin() {
               students: renderStudentsPage, weekplan: renderWeekplan,
               bodytrack: renderBodyTrack, menu: renderMenuMgr,
               materials: renderMaterials, accounts: renderAccounts, report: renderReport };
-            if (renders[currentSection]) el.innerHTML = renders[currentSection]();
+            if (renders[currentSection]) safeRerenderMainContent(renders[currentSection]);
             updateBadge();
           }
         }, 200);
@@ -1099,11 +1099,14 @@ function connectRealtime() {
           _cache[record.key] = record.value;
           try { localStorage.setItem('cd_' + record.key, JSON.stringify(record.value)); } catch {}
           updateBadge();
+          // 這個即時頻道沒有過濾，全系統任何人的異動都會廣播過來，
+          // 跟自己學員無關的變化就不要觸發整頁重繪（避免無謂閃爍，也減少打字被蓋掉的機會）
+          if (!isMyStudentKey(record.key)) return;
           if (currentSection === 'feedback') {
-            document.getElementById('main-content').innerHTML = renderFeedback();
+            safeRerenderMainContent(renderFeedback);
           }
           if (currentSection === 'dashboard') {
-            document.getElementById('main-content').innerHTML = renderDashboard();
+            safeRerenderMainContent(renderDashboard);
           }
         }
       } catch(e) {}
@@ -1234,6 +1237,23 @@ function openLightbox(src) {
 }
 function closeLightbox() {
   document.getElementById('lightbox').classList.add('hidden');
+}
+// 這個即時同步頻道沒有依帳號過濾，全部營養師/學員的異動都會廣播過來，
+// 這裡只是用 key 字串粗略判斷「是不是我自己學員的資料」，用來決定要不要觸發重繪，不是權限控管
+function isMyStudentKey(key) {
+  try {
+    return getMyStudents().some(s => key.includes(s.id));
+  } catch(e) { return true; } // 判斷失敗時保守地當作相關，不要漏掉真正的更新
+}
+// 背景事件（即時推播／背景刷新）要重繪畫面時，先檢查營養師是不是正在輸入框打字，
+// 如果是就先不要整頁重繪，避免把打到一半的文字整個蓋掉；資料本身已經存進快取了，不會遺失，只是畫面晚一點才更新
+function safeRerenderMainContent(renderFn) {
+  const active = document.activeElement;
+  const isTyping = active && active.closest && active.closest('#main-content') &&
+    (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+  if (isTyping) return false;
+  document.getElementById('main-content').innerHTML = renderFn();
+  return true;
 }
 function getMyStudents() {
   const storedList = gs(`rd_students_${currentRD.id}`) || [];
@@ -1421,8 +1441,7 @@ function showSection(sec) {
       const sid = wpStudentId, wk = wpWeek;
       if (sid) refreshWeekplan(sid, wk).then(() => {
         if (currentSection === 'weekplan' && wpStudentId === sid && wpWeek === wk) {
-          document.getElementById('main-content').innerHTML = renderWeekplan();
-          setTimeout(autoCalcTotal, 80);
+          if (safeRerenderMainContent(renderWeekplan)) setTimeout(autoCalcTotal, 80);
         }
       });
     }
@@ -2060,7 +2079,7 @@ function selectFeedbackDay(d) {
   if (feedbackStudentId) {
     refreshStudentDay(feedbackStudentId, d).then(() => {
       markRdViewed(feedbackStudentId, d);
-      document.getElementById('main-content').innerHTML = renderFeedback();
+      safeRerenderMainContent(renderFeedback);
       updateBadge();
     });
   }
@@ -2080,7 +2099,7 @@ function openFeedbackForStudent(id, day) {
         existing.rdViewedAt = new Date().toISOString();
         ss(key, existing);
       }
-      document.getElementById('main-content').innerHTML = renderFeedback();
+      safeRerenderMainContent(renderFeedback);
       updateBadge();
     }
   });
@@ -3989,8 +4008,7 @@ function switchWpStudent(id) {
   // 背景抓伺服器最新的週計畫／目標，避免本機快取過期時顯示「尚未設定」
   refreshWeekplan(id, wpWeek).then(() => {
     if (wpStudentId === id) {
-      document.getElementById('main-content').innerHTML = renderWeekplan();
-      setTimeout(autoCalcTotal, 50);
+      if (safeRerenderMainContent(renderWeekplan)) setTimeout(autoCalcTotal, 50);
     }
   });
 }
@@ -4001,8 +4019,7 @@ function switchWpWeek(w) {
   const sid = wpStudentId;
   refreshWeekplan(sid, w).then(() => {
     if (wpStudentId === sid && wpWeek === w) {
-      document.getElementById('main-content').innerHTML = renderWeekplan();
-      setTimeout(autoCalcTotal, 50);
+      if (safeRerenderMainContent(renderWeekplan)) setTimeout(autoCalcTotal, 50);
     }
   });
 }
