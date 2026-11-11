@@ -428,7 +428,7 @@ function showNewReplyToast(name, studentId, day, text) {
         style="background:none;border:none;color:#94a3b8;font-size:18px;cursor:pointer;padding:0;line-height:1;flex-shrink:0">✕</button>
     </div>
     <div style="display:flex;gap:8px;margin-top:12px">
-      <button onclick="feedbackStudentId='${studentId}';selectedFeedbackDay='${day}';showSection('feedback');document.getElementById('reply-toast').remove();setTimeout(()=>markRdViewed('${studentId}','${day}'),500)"
+      <button onclick="feedbackStudentId='${studentId}';selectedFeedbackDay='${day}';fbCalStart=null;showSection('feedback');document.getElementById('reply-toast').remove();setTimeout(()=>markRdViewed('${studentId}','${day}'),500)"
         style="flex:1;padding:7px;background:#0d9488;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">
         立即查看 →
       </button>
@@ -1038,6 +1038,18 @@ function getRdUser(id) {
 const RD_USERS = RD_USERS_STATIC;
 const STUDENTS_DB = {};
 
+
+// ── 日期代號：2026 年（含）以前沿用「月/日」，2027 起加上年份 ──
+// 舊資料都是「月/日」格式；若不加年份，2027/4/15 會跟 2026/4/15 用到同一筆紀錄
+function dayId(dt) {
+  const y = dt.getFullYear(), m = dt.getMonth() + 1, d = dt.getDate();
+  return y <= 2026 ? `${m}/${d}` : `${y}/${m}/${d}`;
+}
+function dayIdToDate(id) {
+  const p = String(id).split('/').map(Number);
+  return p.length === 3 ? new Date(p[0], p[1] - 1, p[2]) : new Date(2026, p[0] - 1, p[1]);
+}
+
 function buildStudentDates(startStr, endStr) {
   const parseDate = str => {
     if (!str) return null;
@@ -1054,7 +1066,7 @@ function buildStudentDates(startStr, endStr) {
     const d = new Date(base); d.setDate(base.getDate() + i);
     if (end && d > end) break;
     if (!end && i >= 29) break;
-    dates.push(`${d.getMonth()+1}/${d.getDate()}`);
+    dates.push(dayId(d));
   }
   return dates;
 }
@@ -1350,7 +1362,7 @@ function formatDate(d) {
 }
 function todayStr() {
   const d = new Date();
-  return `${d.getMonth()+1}/${d.getDate()}`;
+  return dayId(d);
 }
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -2038,7 +2050,7 @@ function studentDateObjs(s) {
   return buildStudentDates(s.start, s.end).map((key, i) => {
     let date;
     if (base && !isNaN(base.getTime())) { date = new Date(base); date.setDate(base.getDate() + i); }
-    else { const [m, d] = key.split('/').map(Number); date = new Date(new Date().getFullYear(), m - 1, d); }
+    else { date = dayIdToDate(key); }
     return { key, date };
   });
 }
@@ -2137,6 +2149,86 @@ async function calcPortionAvg(studentId) {
     </details>`;
 }
 
+
+// ── 飲食回覆：日曆（本週在第一排，一次顯示 5 週）──
+let fbCalStart = null, fbCalStudent = null;
+const FB_CAL_ROWS = 5;
+function _mondayOf(dt) { const r = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()); r.setDate(r.getDate() - ((r.getDay() + 6) % 7)); return r; }
+function _addDays(dt, n) { const r = new Date(dt); r.setDate(r.getDate() + n); return r; }
+function fbCalAnchor(s) {
+  const days = buildStudentDates(s.start, s.end);
+  if (!days.length) return _mondayOf(new Date());
+  const first = dayIdToDate(days[0]), last = dayIdToDate(days[days.length - 1]);
+  let a = days.includes(selectedFeedbackDay) ? dayIdToDate(selectedFeedbackDay) : new Date();
+  if (a < first) a = first; if (a > last) a = last;
+  return _mondayOf(a);
+}
+function fbCalMove(delta) {
+  const s = getActiveStudents().find(x => x.id === feedbackStudentId);
+  if (!s) return;
+  const days = buildStudentDates(s.start, s.end);
+  const min = _mondayOf(dayIdToDate(days[0])), max = _mondayOf(dayIdToDate(days[days.length - 1]));
+  let n = delta === 0 ? _mondayOf(new Date()) : _addDays(fbCalStart || fbCalAnchor(s), delta * 7 * FB_CAL_ROWS);
+  if (n > max) n = max; if (n < min) n = min;
+  fbCalStart = n;
+  safeRerenderMainContent(renderFeedback);
+}
+function renderFeedbackCalendar(s, today) {
+  const days = buildStudentDates(s.start, s.end);
+  if (!days.length) return '';
+  const inCourse = new Set(days);
+  if (!fbCalStart || fbCalStudent !== s.id) { fbCalStart = fbCalAnchor(s); fbCalStudent = s.id; }
+  const lastDate = dayIdToDate(days[days.length - 1]);
+  const firstDate = dayIdToDate(days[0]);
+  const wg = buildWeekGroups(days);
+  const weekOf = id => { const i = wg.findIndex(g => g.dates.includes(id)); return i >= 0 ? i + 1 : null; };
+  const rows = [];
+  for (let r = 0; r < FB_CAL_ROWS; r++) {
+    const mon = _addDays(fbCalStart, r * 7);
+    if (mon > lastDate) break;
+    const cells = [];
+    for (let c = 0; c < 7; c++) {
+      const dt = _addDays(mon, c);
+      const id = dayId(dt);
+      const showMonth = dt.getDate() === 1 || (r === 0 && c === 0);
+      const top = `<div style="font-size:9px;line-height:1;height:9px;color:var(--g4)">${showMonth ? (dt.getMonth() + 1) + '月' : ''}</div>`;
+      if (!inCourse.has(id)) {
+        cells.push(`<div style="flex:1;text-align:center;padding:2px 0">${top}<div style="height:34px;line-height:34px;font-size:13px;color:var(--g3)">${dt.getDate()}</div></div>`);
+        continue;
+      }
+      const food = gs(`food_${s.id}_${id}`);
+      const replies = food && Array.isArray(food.studentReplies) ? food.studentReplies : [];
+      const lastReplyAt = replies.length ? replies[replies.length - 1].at : null;
+      const hasUnreadReply = lastReplyAt && (!food.rdRepliesReadAt || food.rdRepliesReadAt < lastReplyAt);
+      const pending = dayHasUnrepliedMeal(food) || hasUnreadReply;
+      const hasContent = food && (food.hasData || food.notified);
+      const isSel = id === selectedFeedbackDay, isToday = id === today;
+      const bg = isSel ? 'var(--teal)' : '#fff';
+      const color = isSel ? '#fff' : hasContent ? 'var(--teal-dark)' : 'var(--g6)';
+      const border = isSel ? 'var(--teal)' : isToday ? 'var(--teal)' : hasContent ? 'var(--teal-mid)' : 'var(--g2)';
+      cells.push(`<div style="flex:1;text-align:center;padding:2px 0">${top}
+        <button onclick="selectFeedbackDay('${id}')" title="${id}（第 ${weekOf(id)} 週）"
+          style="position:relative;width:34px;height:34px;border-radius:50%;border:${isToday && !isSel ? 2 : 1.5}px solid ${border};background:${bg};color:${color};font-size:13px;font-weight:${hasContent || isSel ? 700 : 500};cursor:pointer;font-family:inherit;padding:0">
+          ${dt.getDate()}${pending ? `<span style="position:absolute;top:-1px;right:-1px;width:9px;height:9px;border-radius:50%;background:var(--red);border:1.5px solid #fff"></span>` : ''}
+        </button></div>`);
+    }
+    rows.push(`<div style="display:flex">${cells.join('')}</div>`);
+  }
+  const fmt = dt => `${dt.getFullYear() > 2026 || firstDate.getFullYear() !== lastDate.getFullYear() ? dt.getFullYear() + '/' : ''}${dt.getMonth() + 1}/${dt.getDate()}`;
+  const endShown = _addDays(fbCalStart, rows.length * 7 - 1);
+  const canPrev = fbCalStart > _mondayOf(firstDate), canNext = endShown < lastDate;
+  const selWeek = weekOf(selectedFeedbackDay);
+  const navBtn = (label, delta, on) => `<button onclick="fbCalMove(${delta})" ${on ? '' : 'disabled'} style="border:1.5px solid var(--g2);background:#fff;border-radius:8px;padding:4px 10px;font-size:12px;font-family:inherit;cursor:${on ? 'pointer' : 'default'};color:${on ? 'var(--g6)' : 'var(--g3)'}">${label}</button>`;
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700;color:var(--g7)">${fmt(fbCalStart)} – ${fmt(endShown)}
+        ${selWeek ? `<span style="font-size:11px;font-weight:600;color:var(--teal);margin-left:6px">目前選擇：${selectedFeedbackDay}（第 ${selWeek} 週）</span>` : ''}</div>
+      <div style="display:flex;gap:6px">${navBtn('‹ 前 5 週', -1, canPrev)}${navBtn('本週', 0, true)}${navBtn('後 5 週 ›', 1, canNext)}</div>
+    </div>
+    <div style="display:flex;margin-bottom:4px">${['一','二','三','四','五','六','日'].map(w => `<div style="flex:1;text-align:center;font-size:11px;font-weight:700;color:var(--g4)">${w}</div>`).join('')}</div>
+    ${rows.join('')}`;
+}
+
 function renderFeedback() {
   const students = getActiveStudents();
   const today = todayStr();
@@ -2205,27 +2297,7 @@ function renderFeedback() {
   const sDates = buildStudentDates(s.start, s.end);
   const weekGroups = buildWeekGroups(sDates);
 
-  const weekNavHTML = weekGroups.map(wg => {
-    const chips = wg.dates.map(d => {
-      const food = gs(`food_${s.id}_${d}`);
-      const notified = food && food.notified;
-      const hasFb = food && (Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks.length : food.rdFeedback);
-      const isToday = d === today;
-      let cls = 'day-chip';
-      const hasContent = food && (food.hasData || food.notified);
-      const replies = food && Array.isArray(food.studentReplies) ? food.studentReplies : [];
-      const lastReplyAt = replies.length ? replies[replies.length-1].at : null;
-      const hasUnreadReply = lastReplyAt && (!food.rdRepliesReadAt || food.rdRepliesReadAt < lastReplyAt);
-      if (d === selectedFeedbackDay) cls += ' active';
-      else if (dayHasUnrepliedMeal(food) || hasUnreadReply) cls += ' notified';
-      else if (hasContent) cls += ' has-data';
-      return `<button class="${cls}" onclick="selectFeedbackDay('${d}')">${d}${isToday ? '▸' : ''}</button>`;
-    }).join('');
-    return `<div style="margin-bottom:10px">
-      <div style="font-size:11px;font-weight:700;color:var(--g4);margin-bottom:5px;letter-spacing:0.5px">${wg.label}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
-    </div>`;
-  }).join('');
+  const weekNavHTML = renderFeedbackCalendar(s, today);
 
   const food = gs(`food_${s.id}_${selectedFeedbackDay}`) || null;
   const wGroups2 = buildWeekGroups(buildStudentDates(s.start, s.end));
@@ -2574,6 +2646,7 @@ function renderFeedback() {
 
 function switchFeedbackStudent(id) {
   feedbackStudentId = id;
+  fbCalStart = null;
   selectedFeedbackDay = todayStr();
   document.getElementById('main-content').innerHTML = renderFeedback();
 }
@@ -2604,6 +2677,11 @@ async function refreshStudentDay(studentId, day) {
 
 function selectFeedbackDay(d) {
   selectedFeedbackDay = d;
+  // 選到目前日曆範圍外的日子（例如從搜尋結果點進來）時，日曆跟著跳到那一週
+  if (fbCalStart) {
+    const dt = dayIdToDate(d);
+    if (dt < fbCalStart || dt > _addDays(fbCalStart, FB_CAL_ROWS * 7 - 1)) fbCalStart = null;
+  }
   document.getElementById('main-content').innerHTML = renderFeedback();
   updateBadge();
   // 背景從 Supabase 抓最新資料（確保心情、照片等都是最新的）
@@ -2619,6 +2697,7 @@ function selectFeedbackDay(d) {
 function openFeedbackForStudent(id, day) {
   feedbackStudentId = id;
   selectedFeedbackDay = day;
+  fbCalStart = null;
   showSection('feedback');
   // 背景刷新最新資料
   refreshStudentDay(id, day).then(() => {
@@ -4299,8 +4378,7 @@ ${(() => {
       const weekDays = wg.dates.map(d => {
         const f = gs(`food_${s.id}_${d}`);
         const NO_EX_WORDS = /^(無|沒有|no|x)$/i; const hasEx = f && f.exType && f.exType.trim() && !NO_EX_WORDS.test(f.exType.trim());
-        const [m, day] = d.split('/');
-        const dt = new Date(new Date().getFullYear(), m-1, day);
+        const dt = dayIdToDate(d);
         const dayName = ['日','一','二','三','四','五','六'][dt.getDay()];
         const isFuture = dt > new Date();
         return `<div style="flex:1;text-align:center">
