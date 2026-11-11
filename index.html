@@ -48,10 +48,12 @@ function gs(key) {
 // ── 寫入（cache + localStorage + Supabase 同步） ──
 const _inFlightWrites = new Set(); // 正在寫入 Supabase 過程中的 key，防止背景同步用舊資料蓋掉剛寫入的新資料
 function ss(key, val) {
+  const hadLocal = _cache[key] !== undefined && _cache[key] !== null;
   _cache[key] = val;
   try { if (val === null) localStorage.removeItem('cd_' + key); else localStorage.setItem('cd_' + key, JSON.stringify(val)); } catch {}
   _inFlightWrites.add(key);
-  sbWrite(key, val).finally(() => { _inFlightWrites.delete(key); });
+  const w = (_isMergeKey(key) && _isPlainObj(val)) ? sbMergeWrite(key, val, hadLocal) : sbWrite(key, val);
+  w.finally(() => { _inFlightWrites.delete(key); });
 }
 
 // ── 上傳檔案到 Supabase Storage ──
@@ -108,6 +110,7 @@ async function sbWrite(key, val) {
 
 // ── 確認寫入是否真正成功（給重要操作用，會回傳 true/false） ──
 async function sbWriteConfirmed(key, val) {
+  if (_isMergeKey(key) && _isPlainObj(val)) return sbMergeWrite(key, val, true);
   try {
     const res = await fetch(`${SB_URL}/rest/v1/cd`, {
       method: 'POST',
@@ -119,6 +122,127 @@ async function sbWriteConfirmed(key, val) {
     try { localStorage.removeItem('cd_pending_' + key); } catch {}
     return true;
   } catch(e) {
+    console.warn('寫入失敗，加入待寫入隊列:', key, e.message);
+    _pendingWrites[key] = { val, at: new Date().toISOString() };
+    try { localStorage.setItem('cd_pending_' + key, JSON.stringify({ val, at: new Date().toISOString() })); } catch {}
+    return false;
+  }
+}
+
+
+// ══════════ 安全寫入：飲食紀錄只送出「有變動的欄位」，由資料庫合併 ══════════
+// 學員端和營養師後台都會改同一天的紀錄；整包寫回時，手上版本若比較舊就會蓋掉對方的內容。
+// 這裡記住「上次從雲端拿到的版本」各欄位的指紋，存檔時只送出跟它不同的欄位。
+function _isMergeKey(key) { return typeof key === 'string' && key.startsWith('food_'); }
+function _isPlainObj(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+function _stableStr(v) {
+  if (v === undefined) return 'null';
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(_stableStr).join(',') + ']';
+  return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort().map(k => JSON.stringify(k) + ':' + _stableStr(v[k])).join(',') + '}';
+}
+function _hashStr(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(36) + s.length.toString(36);
+}
+function _fieldHashes(obj) {
+  const o = {};
+  Object.keys(obj || {}).forEach(k => { if (obj[k] !== undefined) o[k] = _hashStr(_stableStr(obj[k])); });
+  return o;
+}
+const _baseHashes = {};
+// 每次「用雲端資料更新本機」時呼叫，記住雲端版本
+function _noteServerValue(key, value) {
+  if (!_isMergeKey(key)) return;
+  if (!_isPlainObj(value)) {
+    delete _baseHashes[key];
+    try { localStorage.removeItem('cdh_' + key); } catch {}
+    return;
+  }
+  const h = _fieldHashes(value);
+  _baseHashes[key] = h;
+  try { localStorage.setItem('cdh_' + key, JSON.stringify(h)); } catch {}
+}
+function _getBase(key) {
+  if (_baseHashes[key]) return _baseHashes[key];
+  try {
+    if (localStorage.getItem('cd_' + key) === null) return null;
+    const s = localStorage.getItem('cdh_' + key);
+    if (s) return (_baseHashes[key] = JSON.parse(s));
+  } catch {}
+  return null;
+}
+// undefined = 讀取失敗；null = 雲端沒有這筆
+async function _fetchServerValue(key) {
+  try {
+    const res = await Promise.race([
+      fetch(`${SB_URL}/rest/v1/cd?key=eq.${encodeURIComponent(key)}&select=value`, { headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY } }),
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000))
+    ]);
+    if (!res.ok) return undefined;
+    const rows = await res.json();
+    return rows[0] ? rows[0].value : null;
+  } catch { return undefined; }
+}
+let _patchRpcMissing = false;
+// 回傳 true 代表已確認寫進雲端；失敗會放進待補寫隊列，之後自動重試
+async function sbMergeWrite(key, val, allowRemove = true) {
+  try {
+    let base = _getBase(key);
+    let srv;
+    if (!base) {
+      // 不知道雲端目前長怎樣 → 先讀，讀不到就先不寫（寧可晚點補寫，也不要蓋掉資料）
+      srv = await _fetchServerValue(key);
+      if (srv === undefined) throw new Error('cannot read latest');
+      base = _isPlainObj(srv) ? _fieldHashes(srv) : {};
+      allowRemove = false;
+    }
+    const cur = _fieldHashes(val);
+    const patch = {}, remove = [];
+    Object.keys(cur).forEach(k => { if (cur[k] !== base[k]) patch[k] = val[k]; });
+    if (allowRemove) Object.keys(base).forEach(k => { if (!(k in cur)) remove.push(k); });
+
+    let merged;
+    if (!Object.keys(patch).length && !remove.length) {
+      merged = _isPlainObj(srv) ? srv : null;
+    } else {
+      if (!_patchRpcMissing) {
+        const res = await fetch(`${SB_URL}/rest/v1/rpc/cd_patch`, {
+          method: 'POST',
+          headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ p_key: key, p_patch: patch, p_remove: remove })
+        });
+        if (res.ok) merged = await res.json();
+        else if (res.status === 404) _patchRpcMissing = true;
+        else throw new Error('patch failed ' + res.status);
+      }
+      if (merged === undefined) {
+        // 資料庫還沒裝合併功能：先讀雲端最新版本，把這次的變動套上去再寫回
+        if (srv === undefined) srv = await _fetchServerValue(key);
+        if (srv === undefined) throw new Error('cannot read latest');
+        merged = { ...(_isPlainObj(srv) ? srv : {}), ...patch };
+        remove.forEach(k => { delete merged[k]; });
+        const res2 = await fetch(`${SB_URL}/rest/v1/cd`, {
+          method: 'POST',
+          headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
+          body: JSON.stringify({ key, value: merged, updated_at: new Date().toISOString() })
+        });
+        if (!res2.ok) throw new Error('write failed');
+      }
+    }
+    if (_isPlainObj(merged)) {
+      _noteServerValue(key, merged);
+      // 這段期間本機沒有再改過，就換成雲端合併後的完整版本（會包含對方剛寫的內容）
+      if (_cache[key] === val) {
+        _cache[key] = merged;
+        try { localStorage.setItem('cd_' + key, JSON.stringify(merged)); } catch {}
+      }
+    }
+    delete _pendingWrites[key];
+    try { localStorage.removeItem('cd_pending_' + key); } catch {}
+    return true;
+  } catch (e) {
     console.warn('寫入失敗，加入待寫入隊列:', key, e.message);
     _pendingWrites[key] = { val, at: new Date().toISOString() };
     try { localStorage.setItem('cd_pending_' + key, JSON.stringify({ val, at: new Date().toISOString() })); } catch {}
@@ -145,7 +269,8 @@ async function flushPendingWrites() {
   showToast(`🔄 補寫 ${keys.length} 筆離線資料中…`);
   for (const key of keys) {
     const { val } = _pendingWrites[key];
-    await sbWrite(key, val);
+    if (_isMergeKey(key) && _isPlainObj(val)) await sbMergeWrite(key, val, false);
+    else await sbWrite(key, val);
     await new Promise(r => setTimeout(r, 50));
   }
   showToast('✅ 離線資料已全部同步！');
@@ -193,6 +318,7 @@ async function warmCache() {
    }
    if (_inFlightWrites.has(key)) return; // 該 key 正在寫入中，跳過避免用舊資料覆蓋剛寫入的新資料
    _cache[key] = value;
+   _noteServerValue(key, value);
    try { localStorage.setItem('cd_' + key, JSON.stringify(value)); } catch {}
     if (key.startsWith('rduser_')) {
       const rid = key.replace('rduser_', '');
@@ -1097,6 +1223,7 @@ function connectRealtime() {
           // 該 key 正在寫入中，或本機有離線待補寫的新版本，代表本機比這則廣播新，不要蓋掉（否則會把剛送出的回饋沖銷掉）
           if (_pendingWrites[record.key] || _inFlightWrites.has(record.key)) return;
           _cache[record.key] = record.value;
+          _noteServerValue(record.key, record.value);
           try { localStorage.setItem('cd_' + record.key, JSON.stringify(record.value)); } catch {}
           updateBadge();
           // 這個即時頻道沒有過濾，全系統任何人的異動都會廣播過來，
@@ -1609,6 +1736,407 @@ function renderDashboard() {
 // ══════════════════════════════════════
 // FEEDBACK
 // ══════════════════════════════════════
+// ══════════ 份數自動判定（從營養師回覆文字估算六大類份數）══════════
+const PORTION_CATS = ['c','p','v','f','d','o'];
+const PORTION_LABELS = { c:'全穀雜糧', p:'豆魚蛋肉', v:'蔬菜', f:'水果', d:'乳品', o:'油脂' };
+const PORTION_KW = [
+  ['c', '全穀雜糧類|全穀雜糧|全穀|雜糧|碳水化合物|碳水|澱粉|醣類|主食'],
+  ['p', '豆魚蛋肉類|豆魚蛋肉|蛋白質|蛋白'],
+  ['v', '蔬菜類|蔬菜|青菜'],
+  ['f', '水果類|水果'],
+  ['d', '乳品類|乳製品|乳品|奶類'],
+  ['o', '油脂與堅果種子類|堅果種子|油脂|堅果']
+];
+// 單字類別（碳 5、菜1.5、油4）只在緊接數字時才算
+const PORTION_KW_SHORT = [['c','碳'],['v','菜'],['f','果'],['d','乳'],['o','油']];
+const PORTION_HINTS = [
+  ['c', '麵包|吐司|饅頭|貝果|可頌|地瓜|馬鈴薯|燕麥|麥片|餅乾|玉米|南瓜|芋頭|米粉|冬粉|河粉|白飯|飯|麵|粥|水餃|餃子|包子|蛋餅|穀'],
+  ['p', '雞胸|雞腿|雞肉|豬肉|牛肉|牛排|鮭魚|魚|雞蛋|蛋|豆腐|豆干|豆乾|豆漿|蝦|海鮮|肉'],
+  ['v', '花椰菜|高麗菜|菇|沙拉|木耳|筍|葉菜'],
+  ['f', '芭樂|蘋果|香蕉|橘子|葡萄|奇異果|水梨|西瓜|番茄|莓|柿子'],
+  ['d', '鮮奶|牛奶|優格|優酪|起司|乳酪'],
+  ['o', '花生|杏仁|腰果|核桃|酪梨|奶油|美乃滋']
+];
+const _pkwAll = PORTION_KW.map(([c, w]) => w).join('|');
+const _pNum = '(\\d+(?:\\.\\d+)?)(?:\\s*[-~～到至—]\\s*(\\d+(?:\\.\\d+)?))?';
+const _pUnitAfter = /^\s*(?:顆|片|塊|個|杯|碗|盤|串|條|根|隻|捲|包|罐|瓶|湯匙|匙|g|克|公克|ml|毫升|cc|大卡|卡|kcal|%|％|分鐘|分|步|小時|次|天|元|年|月|號|樓|吋|cm|kg|公斤)/i;
+const _pAdvice = /建議|下次|可以再|可以改|可以換|可以吃|可以選|改成|換成|設計|減少|多加|再加|需要再|至少要|才足夠|才可以|應該吃|目標|不足/;
+const _pSummaryLine = /份量估算|估算[：:]|份量[：:]|份數[：:]|➡️|→|->|=>|合計|總計|統計|小計|整餐|這餐|^\s*(?:早餐|早午餐|午餐|晚餐|點心|上午點心|下午點心|宵夜)\s*(?:份量|份數)?\s*(?:估算)?\s*[：:]/;
+
+function _pCatOfKw(word) {
+  for (const [c, w] of PORTION_KW) if (new RegExp('^(?:' + w + ')$').test(word)) return c;
+  return null;
+}
+function _pPrep(text, keepParens) {
+  const zh = { 一:1, 兩:2, 二:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10 };
+  let t = String(text || '')
+    .replace(/[０-９．]/g, ch => ch === '．' ? '.' : String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  if (!keepParens) t = t.replace(/（[^（）]*）|\([^()]*\)/g, '');
+  return t
+    .replace(/(\d)[一兩二三四五六七八九十]份/g, '$1份')
+    .replace(/([一兩二三四五六七八九十])份半/g, (_, n) => (zh[n] + 0.5) + '份')
+    .replace(/半份/g, '0.5份')
+    .replace(/([一兩二三四五六七八九十])份/g, (_, n) => zh[n] + '份');
+}
+
+// 解析單一則回覆 → { c: 2.5, p: 3, ... }（只含有提到的類別）
+function parsePortionText(rawText, _keepParens) {
+  const text = _pPrep(rawText, _keepParens);
+  const lines = text.split(/\n/);
+  const mentions = [];
+  lines.forEach((line, li) => {
+    // 子句：用來排除「建議…」這種不是實際攝取的句子；用「、」接續的清單沿用同一判斷
+    const subRe = /[^，,。！!？?；;、～~＋+]+/g;
+    let sm, adviceRun = false;
+    while ((sm = subRe.exec(line))) {
+      const sub = sm[0], subStart = sm.index;
+      const sep = line.charAt(subStart - 1);
+      if (sep !== '、' && sep !== '＋' && sep !== '+') adviceRun = false;
+      if (_pAdvice.test(sub)) adviceRun = true;
+      if (adviceRun) continue;
+      const numRe = new RegExp(_pNum, 'g');
+      let nm;
+      while ((nm = numRe.exec(sub))) {
+        const s0 = nm.index, s1 = nm.index + nm[0].length;
+        const before = sub.slice(0, s0), after = sub.slice(s1);
+        if (/[\/:：]\s*$/.test(before) && /\d\s*[\/:]\s*$/.test(before)) continue;
+        if (/^\s*[\/:]\s*\d/.test(after)) continue;
+        if (/\d$/.test(before)) continue;
+        const val = nm[2] ? (parseFloat(nm[1]) + parseFloat(nm[2])) / 2 : parseFloat(nm[1]);
+        if (!(val >= 0) || val > 30) continue;
+        let cat = null;
+        // 1. 字母：C4、1P、P 3.5
+        let lm = after.match(/^\s*([CPVFDOcpvfdo])(?![A-Za-z])/);
+        if (lm) cat = lm[1].toLowerCase();
+        if (!cat && (lm = before.match(/(?:^|[^A-Za-z])([CPVFDOcpvfdo])\s*$/))) cat = lm[1].toLowerCase();
+        if (!cat && _pUnitAfter.test(after)) continue;
+        // 2. 類別在數字前且緊接：蛋白質3份、碳水：2、蔬菜量至少2
+        if (!cat) {
+          const m = before.match(new RegExp('(' + _pkwAll + ')\\s*(?:量)?\\s*[：:]?\\s*(?:約莫|大約|約|估算|估|至少|抓)?\\s*$'));
+          if (m) cat = _pCatOfKw(m[1]);
+        }
+        if (!cat) {
+          for (const [c, w] of PORTION_KW_SHORT) {
+            if (new RegExp(w + '\\s*[：:]?\\s*$').test(before)) { cat = c; break; }
+          }
+        }
+        // 3. 類別在數字後：2份澱粉、0.5蛋白質、1.5份的油脂
+        if (!cat) {
+          const m = after.match(new RegExp('^\\s*(?:份)?\\s*(?:的)?\\s*(' + _pkwAll + ')'));
+          if (m) cat = _pCatOfKw(m[1]);
+        }
+        // 4. 只寫「約2份」：往前找同一句最近提到的類別或食物
+        if (!cat && /^\s*份/.test(after)) {
+          const sentence = line.slice(0, subStart + s0);
+          const sentStart = Math.max(sentence.lastIndexOf('。'), sentence.lastIndexOf('！'), sentence.lastIndexOf('？'), sentence.lastIndexOf('!'), sentence.lastIndexOf('?'));
+          const scope = sentence.slice(sentStart + 1);
+          let best = -1;
+          [...PORTION_KW, ...PORTION_HINTS].forEach(([c, w]) => {
+            const re = new RegExp(w, 'g'); let hm;
+            while ((hm = re.exec(scope))) { if (hm.index > best) { best = hm.index; cat = c; } }
+          });
+        }
+        // 這一行在這個數字之前出現「估算：、➡️、這餐…」→ 視為總結
+        if (cat) mentions.push({ cat, val, line: li, summary: _pSummaryLine.test(line.slice(0, subStart + s0)) });
+      }
+    }
+  });
+  const out = {};
+  PORTION_CATS.forEach(c => {
+    const ms = mentions.filter(m => m.cat === c);
+    if (!ms.length) return;
+    const sums = ms.filter(m => m.summary);
+    if (sums.length) {
+      const lastLine = sums[sums.length - 1].line;
+      out[c] = sums.filter(m => m.line === lastLine).reduce((a, m) => a + m.val, 0);
+    } else {
+      out[c] = ms.reduce((a, m) => a + m.val, 0);
+    }
+  });
+  // 整則都包在括號裡（例：「（4份澱粉）」）時，保留括號再判一次
+  if (!Object.keys(out).length && !_keepParens && /[（(]/.test(rawText || '')) return parsePortionText(rawText, true);
+  return out;
+}
+
+// 一餐的所有回覆（依時間）→ 後面的回覆覆蓋前面同一類別
+function parseMealFeedbacks(fbArr) {
+  const sorted = [...(fbArr || [])].filter(fb => fb && fb.text).sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
+  let res = null;
+  sorted.forEach(fb => {
+    const p = parsePortionText(fb.text);
+    if (Object.keys(p).length) res = { ...(res || {}), ...p };
+  });
+  if (!res) return null;
+  const full = {};
+  PORTION_CATS.forEach(c => { full[c] = Math.round((res[c] || 0) * 100) / 100; });
+  return full;
+}
+
+
+// ══════════ 營養師份數估算（每餐 / 整日 / 區間平均）══════════
+// 手動調整存在 rdest_學員ID（一位學員一筆），不寫進學員的飲食紀錄，避免互相覆蓋
+const EST_MEALS = [
+  { key: 'breakfast', label: '早餐' }, { key: 'snack1', label: '點心（上午）' },
+  { key: 'lunch', label: '午餐' }, { key: 'snack2', label: '點心（下午）' },
+  { key: 'dinner', label: '晚餐' }, { key: 'latenight', label: '宵夜' }
+];
+const EST_LETTERS = { c:'C', p:'P', v:'V', f:'F', d:'D', o:'O' };
+
+function estNum(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return String(v);
+}
+function fmtPortion(est) {
+  return PORTION_CATS.map(c => `${EST_LETTERS[c]} ${estNum(est?.[c])}`).join('｜');
+}
+function parsePlanStr(str) {
+  if (!str) return null;
+  const out = {}; let found = false;
+  String(str).replace(/([CPVFDO])\s*(-?\d+(?:\.\d+)?)/g, (_, L, n) => { out[L.toLowerCase()] = parseFloat(n); found = true; });
+  if (!found) return null;
+  PORTION_CATS.forEach(c => { if (out[c] === undefined) out[c] = 0; });
+  return out;
+}
+function getRdEst(studentId) { return gs(`rdest_${studentId}`) || {}; }
+function mealFbArr(food, mealKey) {
+  if (!food) return [];
+  if (Array.isArray(food[mealKey + '_rdFeedbacks'])) return food[mealKey + '_rdFeedbacks'];
+  return food[mealKey + '_rdFeedback'] ? [{ text: food[mealKey + '_rdFeedback'], at: food[mealKey + '_rdFeedbackAt'] }] : [];
+}
+// 回傳 { est, manual } 或 null（沒有可用的估算）
+function mealEstimate(studentId, day, food, mealKey) {
+  const manual = getRdEst(studentId)?.[day]?.[mealKey];
+  if (manual) return { est: manual, manual: true };
+  const auto = parseMealFeedbacks(mealFbArr(food, mealKey));
+  return auto ? { est: auto, manual: false } : null;
+}
+function dayEstimate(studentId, day, food) {
+  const total = {}; PORTION_CATS.forEach(c => total[c] = 0);
+  let meals = 0;
+  EST_MEALS.forEach(m => {
+    const r = mealEstimate(studentId, day, food, m.key);
+    if (!r) return;
+    meals++;
+    PORTION_CATS.forEach(c => total[c] += Number(r.est[c]) || 0);
+  });
+  return meals ? { total, meals } : null;
+}
+function planForDay(s, day) {
+  const wg = buildWeekGroups(buildStudentDates(s.start, s.end));
+  const wi = wg.findIndex(g => g.dates.includes(day));
+  const plan = gs(`wplan_${s.id}_${wi >= 0 ? wi + 1 : 1}`) || {};
+  return parsePlanStr(plan.total);
+}
+
+function renderMealEstRow(studentId, day, food, mealKey) {
+  const r = mealEstimate(studentId, day, food, mealKey);
+  const est = r ? r.est : null;
+  const badge = !r ? ''
+    : r.manual
+      ? `<span style="font-size:10px;font-weight:700;color:var(--amber);background:var(--amber-light);padding:1px 7px;border-radius:10px">已手動調整</span>`
+      : `<span style="font-size:10px;font-weight:700;color:var(--teal-dark);background:var(--teal-light);padding:1px 7px;border-radius:10px">自動判定</span>`;
+  const inputs = PORTION_CATS.map(c => `
+    <label style="display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:var(--g5);font-weight:700">
+      ${EST_LETTERS[c]}<span style="font-weight:400;font-size:9px;color:var(--g4)">${PORTION_LABELS[c]}</span>
+      <input id="est-${mealKey}-${c}" type="number" step="0.5" min="0" value="${est ? estNum(est[c]) : ''}" placeholder="0"
+        style="width:52px;padding:5px 4px;border:1.5px solid var(--g2);border-radius:6px;font-size:13px;text-align:center;font-family:inherit;outline:none"
+        onfocus="this.style.borderColor='var(--teal)';this.select()" onblur="this.style.borderColor='var(--g2)'">
+    </label>`).join('');
+  return `
+    <div id="est-view-${mealKey}" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 12px;padding:7px 10px;background:#fff;border:1px dashed var(--g3);border-radius:8px">
+      <span style="font-size:11px;font-weight:700;color:var(--g5)">營養師估算</span>
+      ${est
+        ? `<span style="font-size:12px;font-weight:700;color:var(--teal-dark);letter-spacing:0.3px">${fmtPortion(est)}</span>${badge}`
+        : `<span style="font-size:11px;color:var(--g4)">尚未判定（回覆裡寫到份數會自動帶入）</span>`}
+      <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 9px;margin-left:auto"
+        onclick="document.getElementById('est-view-${mealKey}').style.display='none';document.getElementById('est-edit-${mealKey}').style.display='block'">✏️ ${est ? '調整' : '手動輸入'}</button>
+    </div>
+    <div id="est-edit-${mealKey}" style="display:none;margin:-4px 0 12px;padding:10px;background:#fff;border:1.5px solid var(--teal);border-radius:8px">
+      <div style="font-size:11px;color:var(--g5);margin-bottom:8px">調整這餐的份數（存檔後不會再被自動判定覆蓋）</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${inputs}</div>
+      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap">
+        ${r && r.manual ? `<button class="btn btn-outline btn-sm" style="font-size:11px;margin-right:auto" onclick="resetMealEst('${studentId}','${day}','${mealKey}')">↺ 還原自動判定</button>` : ''}
+        <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="refreshEstUI('${studentId}','${day}')">取消</button>
+        <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="saveMealEst('${studentId}','${day}','${mealKey}')">儲存</button>
+      </div>
+    </div>`;
+}
+
+function renderDayEstTotal(s, day, food) {
+  const r = dayEstimate(s.id, day, food);
+  const plan = planForDay(s, day);
+  if (!r && !plan) return '';
+  const cell = (content, extra = '') => `<td style="padding:6px 4px;text-align:center;${extra}">${content}</td>`;
+  const head = PORTION_CATS.map(c => `<th style="padding:4px;font-size:11px;color:var(--g5);font-weight:700">${EST_LETTERS[c]}<div style="font-weight:400;font-size:10px;color:var(--g4)">${PORTION_LABELS[c]}</div></th>`).join('');
+  const rowOf = (label, vals, style) => `<tr>${cell(label, 'text-align:left;font-size:11px;color:var(--g5);white-space:nowrap')}${PORTION_CATS.map(c => cell(vals ? estNum(vals[c]) : '–', style)).join('')}</tr>`;
+  const diffRow = (r && plan) ? `<tr>${cell('差異', 'text-align:left;font-size:11px;color:var(--g5)')}${PORTION_CATS.map(c => {
+      const d = Math.round(((r.total[c] || 0) - (plan[c] || 0)) * 100) / 100;
+      const color = Math.abs(d) <= 0.5 ? 'var(--g4)' : d > 0 ? 'var(--amber)' : 'var(--blue)';
+      return cell(Math.abs(d) <= 0.5 ? '—' : (d > 0 ? '+' : '') + estNum(d), `font-size:12px;font-weight:700;color:${color}`);
+    }).join('')}</tr>` : '';
+  return `
+    <div style="background:#fff;border:1.5px solid var(--teal-light);border-radius:10px;padding:12px 14px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <div style="font-size:13px;font-weight:700;color:var(--teal-dark)">📊 整日總計（營養師估算）</div>
+        <div style="font-size:11px;color:var(--g4)">${r ? `已估算 ${r.meals} 餐` : '尚未有估算'}</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:360px">
+          <thead><tr><th></th>${head}</tr></thead>
+          <tbody>
+            ${plan ? rowOf('目標', plan, 'font-size:12px;color:var(--g5)') : ''}
+            ${rowOf('估算', r ? r.total : null, 'font-size:14px;font-weight:800;color:var(--teal-dark)')}
+            ${diffRow}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function refreshEstUI(studentId, day) {
+  const s = getActiveStudents().find(x => x.id === studentId);
+  const food = gs(`food_${studentId}_${day}`);
+  if (!s || studentId !== feedbackStudentId || day !== selectedFeedbackDay) return;
+  EST_MEALS.forEach(m => {
+    const box = document.getElementById(`est-box-${m.key}`);
+    if (box) box.innerHTML = renderMealEstRow(studentId, day, food, m.key);
+  });
+  const total = document.getElementById('day-est-total');
+  if (total) total.innerHTML = renderDayEstTotal(s, day, food);
+}
+
+async function saveMealEst(studentId, day, mealKey) {
+  const val = {};
+  PORTION_CATS.forEach(c => {
+    const n = parseFloat(document.getElementById(`est-${mealKey}-${c}`)?.value);
+    val[c] = isNaN(n) || n < 0 ? 0 : Math.round(n * 100) / 100;
+  });
+  const key = `rdest_${studentId}`;
+  const all = (await refreshKeyFromServer(key)) || {};
+  all[day] = { ...(all[day] || {}), [mealKey]: { ...val, at: new Date().toISOString(), by: currentRD?.id || '' } };
+  ss(key, all);
+  refreshEstUI(studentId, day);
+  showToast('✅ 份數已更新');
+}
+
+async function resetMealEst(studentId, day, mealKey) {
+  const key = `rdest_${studentId}`;
+  const all = (await refreshKeyFromServer(key)) || {};
+  if (all[day]) {
+    delete all[day][mealKey];
+    if (!Object.keys(all[day]).length) delete all[day];
+  }
+  ss(key, all);
+  refreshEstUI(studentId, day);
+  showToast('↺ 已還原為自動判定');
+}
+
+// ── 生成報告：份數平均 ──
+function studentDateObjs(s) {
+  const p = String(s.start || '').replace(/-/g, '/').split('/');
+  const base = p.length === 3 ? new Date(+p[0], +p[1] - 1, +p[2]) : null;
+  return buildStudentDates(s.start, s.end).map((key, i) => {
+    let date;
+    if (base && !isNaN(base.getTime())) { date = new Date(base); date.setDate(base.getDate() + i); }
+    else { const [m, d] = key.split('/').map(Number); date = new Date(new Date().getFullYear(), m - 1, d); }
+    return { key, date };
+  });
+}
+function toDateInput(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function renderPortionAvgCard(s) {
+  const days = studentDateObjs(s);
+  if (!days.length) return '';
+  const first = days[0].date, last = days[days.length - 1].date;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const end = last < today ? last : (today < first ? first : today);
+  return `
+  <div class="card">
+    <div class="card-title">🥗 份數平均</div>
+    <div style="font-size:12px;color:var(--g5);margin-bottom:12px;line-height:1.6">依營養師每天估算的份數，算出這段期間六大類食物的平均攝取。沒有估算資料的日子不列入平均。</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <input id="pa-start" type="date" value="${toDateInput(first)}" min="${toDateInput(first)}" max="${toDateInput(last)}"
+        style="padding:7px 10px;border:1.5px solid var(--g2);border-radius:8px;font-family:inherit;font-size:13px">
+      <span style="color:var(--g4)">～</span>
+      <input id="pa-end" type="date" value="${toDateInput(end)}" min="${toDateInput(first)}" max="${toDateInput(last)}"
+        style="padding:7px 10px;border:1.5px solid var(--g2);border-radius:8px;font-family:inherit;font-size:13px">
+      <button class="btn btn-teal" onclick="calcPortionAvg('${s.id}')">計算平均</button>
+    </div>
+    <div id="portion-avg-output" style="margin-top:14px"></div>
+  </div>`;
+}
+
+async function calcPortionAvg(studentId) {
+  const out = document.getElementById('portion-avg-output');
+  const s = getActiveStudents().find(x => x.id === studentId);
+  if (!out || !s) return;
+  const sv = document.getElementById('pa-start')?.value, ev = document.getElementById('pa-end')?.value;
+  if (!sv || !ev) { showToast('請選擇日期區間'); return; }
+  const [sy, sm, sd] = sv.split('-').map(Number), [ey, em, ed] = ev.split('-').map(Number);
+  const from = new Date(sy, sm - 1, sd), to = new Date(ey, em - 1, ed);
+  if (from > to) { showToast('開始日期不能晚於結束日期'); return; }
+  out.innerHTML = '<div class="text-muted">計算中…</div>';
+  await refreshKeyFromServer(`rdest_${studentId}`);
+
+  const inRange = studentDateObjs(s).filter(x => x.date >= from && x.date <= to);
+  const rows = [], sum = {}, planSum = {};
+  PORTION_CATS.forEach(c => { sum[c] = 0; planSum[c] = 0; });
+  let planDays = 0;
+  inRange.forEach(x => {
+    const food = gs(`food_${s.id}_${x.key}`);
+    const r = dayEstimate(s.id, x.key, food);
+    if (!r) return;
+    rows.push({ key: x.key, total: r.total, meals: r.meals });
+    PORTION_CATS.forEach(c => sum[c] += r.total[c]);
+    const plan = planForDay(s, x.key);
+    if (plan) { planDays++; PORTION_CATS.forEach(c => planSum[c] += plan[c]); }
+  });
+  if (!rows.length) {
+    out.innerHTML = `<div class="notice amber" style="padding:10px 12px;border-radius:8px;background:var(--amber-light);font-size:13px">這段期間（${inRange.length} 天）還沒有營養師的份數估算資料。</div>`;
+    return;
+  }
+  const n = rows.length;
+  const avg = {}, planAvg = planDays ? {} : null;
+  PORTION_CATS.forEach(c => { avg[c] = sum[c] / n; if (planAvg) planAvg[c] = planSum[c] / planDays; });
+  const r1 = v => estNum(Math.round(v * 10) / 10);
+  const tableRows = PORTION_CATS.map(c => {
+    const d = planAvg ? Math.round((avg[c] - planAvg[c]) * 10) / 10 : null;
+    const color = d === null || Math.abs(d) <= 0.5 ? 'var(--g4)' : d > 0 ? 'var(--amber)' : 'var(--blue)';
+    return `<tr style="border-top:1px solid var(--g1)">
+      <td style="padding:8px 6px;font-size:13px;font-weight:700;color:var(--g7)">${EST_LETTERS[c]}　${PORTION_LABELS[c]}</td>
+      <td style="padding:8px 6px;text-align:center;font-size:15px;font-weight:800;color:var(--teal-dark)">${r1(avg[c])}</td>
+      ${planAvg ? `<td style="padding:8px 6px;text-align:center;font-size:13px;color:var(--g5)">${r1(planAvg[c])}</td>
+      <td style="padding:8px 6px;text-align:center;font-size:13px;font-weight:700;color:${color}">${Math.abs(d) <= 0.5 ? '—' : (d > 0 ? '+' : '') + r1(d)}</td>` : ''}
+    </tr>`;
+  }).join('');
+  const dayRows = rows.map(x => `<tr style="border-top:1px solid var(--g1)">
+      <td style="padding:5px 6px;font-size:12px;color:var(--g6);white-space:nowrap">${x.key}<span style="color:var(--g4);font-size:10px">（${x.meals} 餐）</span></td>
+      ${PORTION_CATS.map(c => `<td style="padding:5px 4px;text-align:center;font-size:12px">${estNum(x.total[c])}</td>`).join('')}
+    </tr>`).join('');
+  out.innerHTML = `
+    <div style="font-size:12px;color:var(--g5);margin-bottom:8px">${sv.replace(/-/g, '/')} ～ ${ev.replace(/-/g, '/')}：共 ${inRange.length} 天，列入平均 <b style="color:var(--teal-dark)">${n} 天</b>${inRange.length > n ? `（${inRange.length - n} 天沒有估算資料）` : ''}</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;min-width:320px">
+        <thead><tr style="font-size:11px;color:var(--g5)">
+          <th style="text-align:left;padding:4px 6px">類別</th><th style="padding:4px 6px">每日平均攝取</th>
+          ${planAvg ? `<th style="padding:4px 6px">平均目標</th><th style="padding:4px 6px">差異</th>` : ''}
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+    ${planAvg ? `<div style="font-size:11px;color:var(--g4);margin-top:6px">差異：<span style="color:var(--amber)">＋ 高於目標</span>　<span style="color:var(--blue)">－ 低於目標</span>　— 差距在 0.5 份以內</div>` : ''}
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--teal);font-weight:700">查看每日明細</summary>
+      <div style="overflow-x:auto;margin-top:8px">
+        <table style="width:100%;border-collapse:collapse;min-width:360px">
+          <thead><tr style="font-size:11px;color:var(--g5)"><th style="text-align:left;padding:4px 6px">日期</th>${PORTION_CATS.map(c => `<th style="padding:4px">${EST_LETTERS[c]}</th>`).join('')}</tr></thead>
+          <tbody>${dayRows}</tbody>
+        </table>
+      </div>
+    </details>`;
+}
+
 function renderFeedback() {
   const students = getActiveStudents();
   const today = todayStr();
@@ -1824,7 +2352,8 @@ function renderFeedback() {
         </div>`;
 
       return `<div class="meal-block" style="margin-bottom:8px;padding:14px;background:var(--g0);border-radius:12px">
-        <div style="font-size:12px;font-weight:700;color:var(--g5);background:var(--g0);padding:4px 10px;border-radius:6px;display:inline-block;margin-bottom:12px">${m.label}${mealPlanMap2[m.key] ? `<span style="font-size:11px;font-weight:400;color:var(--teal);margin-left:8px">${mealPlanMap2[m.key]}</span>` : ''}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g5);background:var(--g0);padding:4px 10px;border-radius:6px;display:inline-block;margin-bottom:12px">${m.label}${mealPlanMap2[m.key] ? `<span style="font-size:11px;font-weight:400;color:var(--teal);margin-left:8px">目標 ${mealPlanMap2[m.key]}</span>` : ''}</div>
+        <div id="est-box-${m.key}">${renderMealEstRow(s.id, selectedFeedbackDay, food, m.key)}</div>
         ${chatBubbles}${inputBlock}
       </div>`;
     }).filter(Boolean).join('');
@@ -1870,6 +2399,7 @@ function renderFeedback() {
 
     contentHTML = `
       ${planBanner}
+      <div id="day-est-total">${renderDayEstTotal(s, selectedFeedbackDay, food)}</div>
       ${mealBlocks || '<div class="text-muted" style="padding:12px 0">飲食內容為空</div>'}
       ${lifeItems.length ? `<div class="life-chips">${lifeItems.map(x => `<span class="life-chip">${x.icon} ${x.label}：${x.val}</span>`).join('')}</div>` : ''}
       ${food.moodScore !== undefined && food.moodScore !== null ? (() => {
@@ -2064,6 +2594,7 @@ async function refreshStudentDay(studentId, day) {
       // 若此 key 正在寫入中或有離線待補寫的資料，代表本機版本比伺服器新，不要用剛抓到的舊資料蓋過去
       if (rows[0] && !_pendingWrites[key] && !_inFlightWrites.has(key)) {
         _cache[key] = rows[0].value;
+        _noteServerValue(key, rows[0].value);
         try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
       }
     }
@@ -2119,6 +2650,7 @@ async function refreshInbox(studentId) {
       const rows = await res.json();
       if (rows[0] && !_pendingWrites[key] && !_inFlightWrites.has(key)) {
         _cache[key] = rows[0].value;
+        _noteServerValue(key, rows[0].value);
         try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
       }
     }
@@ -2140,6 +2672,7 @@ async function refreshKeyFromServer(key) {
       const rows = await res.json();
       if (rows[0] && !_pendingWrites[key] && !_inFlightWrites.has(key)) {
         _cache[key] = rows[0].value;
+        _noteServerValue(key, rows[0].value);
         try { localStorage.setItem('cd_' + key, JSON.stringify(rows[0].value)); } catch {}
       }
     }
@@ -4970,7 +5503,8 @@ function renderReport() {
     <button class="btn btn-teal" onclick="generateAIReport('${s.id}')" id="generate-btn">🤖 AI 生成結案報告</button>
     <div style="font-size:11px;color:var(--g4);margin-top:8px">系統自動讀取飲食紀錄、體態數值、生活習慣，約 10-30 秒</div>
   </div>
-  <div id="report-output"></div>` : '<div class="empty-placeholder"><p>尚無進行中學員</p></div>'}`;
+  <div id="report-output"></div>
+  ${renderPortionAvgCard(s)}` : '<div class="empty-placeholder"><p>尚無進行中學員</p></div>'}`;
 }
 
 let _rdApiKey = ''; // kept for compatibility
