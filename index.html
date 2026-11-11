@@ -4426,12 +4426,81 @@ function saveBtNote(studentId) {
 let wpStudentId = null;
 let wpWeek = 1;
 
+
+// ── 週計畫：日曆（一排一週，本週在第一排，一次顯示 5 週）──
+let wpCalFirst = null, wpCalStudent = null, wpCalLastWeek = null;
+const WP_CAL_ROWS = 5;
+function wpCurrentWeek(s) {
+  const wg = buildWeekGroups(buildStudentDates(s.start, s.end));
+  const i = wg.findIndex(g => g.dates.includes(todayStr()));
+  return i >= 0 ? i + 1 : null;
+}
+function wpCalMove(delta) {
+  const s = getActiveStudents().find(x => x.id === wpStudentId);
+  if (!s) return;
+  const total = buildWeekGroups(buildStudentDates(s.start, s.end)).length || 1;
+  const maxFirst = Math.max(1, total - WP_CAL_ROWS + 1);
+  let n = delta === 0 ? (wpCurrentWeek(s) || 1) : (wpCalFirst || 1) + delta * WP_CAL_ROWS;
+  wpCalFirst = Math.min(Math.max(1, n), maxFirst);
+  if (safeRerenderMainContent(renderWeekplan)) setTimeout(autoCalcTotal, 50);
+}
+function renderWpCalendar(s, wGroups) {
+  const total = wGroups.length;
+  if (!total) return '';
+  const maxFirst = Math.max(1, total - WP_CAL_ROWS + 1);
+  // 換學員、或選的週改變且不在畫面上（例如從總覽點「編輯週計畫」進來）時，才跳到選的那週；按前後 5 週時不會被拉回去
+  const outOfView = wpWeek < wpCalFirst || wpWeek > wpCalFirst + WP_CAL_ROWS - 1;
+  if (wpCalStudent !== s.id || !wpCalFirst || (wpWeek !== wpCalLastWeek && outOfView)) {
+    wpCalFirst = Math.min(wpWeek, maxFirst);
+    wpCalStudent = s.id;
+  }
+  wpCalLastWeek = wpWeek;
+  const cur = wpCurrentWeek(s), today = todayStr();
+  const first = wGroups[0].dates[0];
+  const wdNames = ['日','一','二','三','四','五','六'];
+  const startWd = dayIdToDate(first).getDay();
+  const header = Array.from({ length: 7 }, (_, i) => `<div style="flex:1;text-align:center;font-size:11px;font-weight:700;color:var(--g4)">${wdNames[(startWd + i) % 7]}</div>`).join('');
+  const rows = [];
+  for (let w = wpCalFirst; w <= Math.min(total, wpCalFirst + WP_CAL_ROWS - 1); w++) {
+    const g = wGroups[w - 1];
+    const isSel = w === wpWeek, isCur = w === cur;
+    const plan = gs(`wplan_${s.id}_${w}`);
+    const hasPlan = !!(plan && (plan.calories || plan.total));
+    const cells = g.dates.map((id, ci) => {
+      const dt = dayIdToDate(id);
+      const showMonth = dt.getDate() === 1 || ci === 0;
+      return `<div style="flex:1;text-align:center;padding:4px 0">
+        <div style="font-size:9px;line-height:1;height:9px;color:${isSel ? 'rgba(255,255,255,0.8)' : 'var(--g4)'}">${showMonth ? (dt.getMonth() + 1) + '月' : ''}</div>
+        <div style="font-size:13px;font-weight:${id === today ? 800 : 500};color:${isSel ? '#fff' : id === today ? 'var(--teal-dark)' : 'var(--g6)'};${id === today && !isSel ? 'text-decoration:underline;text-underline-offset:3px' : ''}">${dt.getDate()}</div>
+      </div>`;
+    }).join('') + Array.from({ length: 7 - g.dates.length }, () => '<div style="flex:1"></div>').join('');
+    rows.push(`<div onclick="switchWpWeek(${w})" title="${g.label}"
+      style="display:flex;align-items:center;gap:6px;cursor:pointer;border-radius:10px;margin-bottom:4px;padding:2px 6px;
+        background:${isSel ? 'var(--teal)' : '#fff'};border:1.5px solid ${isSel ? 'var(--teal)' : isCur ? 'var(--teal-mid)' : 'var(--g2)'}">
+      <div style="width:58px;flex-shrink:0;font-size:12px;font-weight:800;color:${isSel ? '#fff' : 'var(--g7)'}">W${w}${isCur ? `<div style="font-size:9px;font-weight:700;color:${isSel ? 'rgba(255,255,255,0.85)' : 'var(--teal)'}">本週</div>` : ''}</div>
+      <div style="display:flex;flex:1">${cells}</div>
+      <div style="width:52px;flex-shrink:0;text-align:right;font-size:10px;font-weight:700;color:${isSel ? 'rgba(255,255,255,0.9)' : hasPlan ? 'var(--teal)' : 'var(--g3)'}">${hasPlan ? '✓ 已設定' : '未設定'}</div>
+    </div>`);
+  }
+  const navBtn = (label, delta, on) => `<button onclick="wpCalMove(${delta})" ${on ? '' : 'disabled'} style="border:1.5px solid var(--g2);background:#fff;border-radius:8px;padding:4px 10px;font-size:12px;font-family:inherit;cursor:${on ? 'pointer' : 'default'};color:${on ? 'var(--g6)' : 'var(--g3)'}">${label}</button>`;
+  const lastShown = Math.min(total, wpCalFirst + WP_CAL_ROWS - 1);
+  return `<div class="card" style="margin-bottom:16px;padding:14px 16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700;color:var(--g7)">W${wpCalFirst} – W${lastShown}<span style="font-size:11px;font-weight:600;color:var(--g4);margin-left:6px">共 ${total} 週</span></div>
+      <div style="display:flex;gap:6px">${navBtn('‹ 前 5 週', -1, wpCalFirst > 1)}${navBtn('本週', 0, !!cur)}${navBtn('後 5 週 ›', 1, lastShown < total)}</div>
+    </div>
+    <div style="display:flex;gap:6px;padding:0 6px;margin-bottom:4px"><div style="width:58px"></div><div style="display:flex;flex:1">${header}</div><div style="width:52px"></div></div>
+    ${rows.join('')}
+  </div>`;
+}
+
 function renderWeekplan() {
   const students = getActiveStudents();
   // Validate wpStudentId — reset if not in active list
   if (!wpStudentId || !students.find(x => x.id === wpStudentId)) {
     wpStudentId = students[0]?.id || null;
-    wpWeek = 1;
+    const s0 = students.find(x => x.id === wpStudentId);
+    wpWeek = (s0 && wpCurrentWeek(s0)) || 1;
   }
   const s = students.find(x => x.id === wpStudentId);
 
@@ -4448,8 +4517,7 @@ function renderWeekplan() {
   // Clamp wpWeek to valid range
   if (wpWeek > totalWeeks) wpWeek = 1;
 
-  const weekTabs = wGroups.map((wg, wi) => `
-    <button class="day-chip ${wi+1 === wpWeek ? 'active' : ''}" onclick="switchWpWeek(${wi+1})">${wg.label}</button>`).join('');
+  const weekTabs = renderWpCalendar(s, wGroups);
 
   const plan = gs(`wplan_${s.id}_${wpWeek}`) || {};
   const curGroup = wGroups[wpWeek - 1];
@@ -4473,7 +4541,7 @@ function renderWeekplan() {
     </div>
   </div>
 
-  <div class="day-nav" style="margin-bottom:16px;flex-wrap:wrap">${weekTabs}</div>
+  ${weekTabs}
 
   <div class="card">
     <div class="card-title">📅 W${wpWeek} 基本設定 <span style="font-size:12px;font-weight:400;color:var(--g4)">${autoDate}</span></div>
@@ -4560,7 +4628,10 @@ function renderWeekplan() {
 }
 
 function switchWpStudent(id) {
-  wpStudentId = id; wpWeek = 1;
+  wpStudentId = id;
+  const st = getActiveStudents().find(x => x.id === id);
+  wpWeek = (st && wpCurrentWeek(st)) || 1;
+  wpCalFirst = null;
   document.getElementById('main-content').innerHTML = renderWeekplan();
   setTimeout(autoCalcTotal, 50);
   // 背景抓伺服器最新的週計畫／目標，避免本機快取過期時顯示「尚未設定」
