@@ -1923,6 +1923,40 @@ function renderMealEstRow(studentId, day, food, mealKey) {
     </div>`;
 }
 
+const EST_NAMES = { c:'碳水', p:'蛋白質', v:'蔬菜', f:'水果', d:'乳品', o:'油脂' };
+function dayEstCopyText(r, plan) {
+  // 只列出有份數（或目標有設定）的類別，讀起來比較精簡
+  const cats = PORTION_CATS.filter(c => (r.total[c] || 0) !== 0 || (plan && plan[c]));
+  const part = vals => cats.map(c => `${EST_NAMES[c]} ${estNum(vals[c] || 0)}`).join('、');
+  return `今日份量估算：${part(r.total)}${plan ? `（目標：${part(plan)}）` : ''}`;
+}
+function copyDayEst() {
+  const t = document.getElementById('day-est-copy-text')?.textContent || '';
+  if (!t) return;
+  const done = () => showToast('📋 已複製，可以直接貼給學員');
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(t).then(done).catch(() => fallbackCopy(t, done));
+  } else fallbackCopy(t, done);
+}
+function fallbackCopy(t, done) {
+  const ta = document.createElement('textarea');
+  ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch { showToast('複製失敗，請手動選取文字'); }
+  ta.remove();
+}
+function insertDayEstToOverall() {
+  const t = document.getElementById('day-est-copy-text')?.textContent || '';
+  const input = document.getElementById('fb-input');
+  if (!t || !input) return;
+  input.value = input.value.trim() ? input.value.replace(/\s+$/, '') + '\n' + t : t;
+  input.style.height = 'auto'; input.style.height = input.scrollHeight + 'px';
+  try { localStorage.setItem(`draft_overall_${feedbackStudentId}_${selectedFeedbackDay}`, input.value); } catch {}
+  input.focus();
+  input.scrollIntoView({ block: 'center' });
+  showToast('已放進整日總結，確認後按送出');
+}
+
 function renderDayEstTotal(s, day, food) {
   const r = dayEstimate(s.id, day, food);
   const plan = planForDay(s, day);
@@ -1951,6 +1985,11 @@ function renderDayEstTotal(s, day, food) {
           </tbody>
         </table>
       </div>
+      ${r ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:8px 10px;background:var(--g0);border-radius:8px">
+        <div id="day-est-copy-text" style="flex:1;min-width:200px;font-size:13px;color:var(--g7);line-height:1.6;user-select:all">${dayEstCopyText(r, plan)}</div>
+        <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="copyDayEst()">📋 複製</button>
+        <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="insertDayEstToOverall()">放進整日總結</button>
+      </div>` : ''}
     </div>`;
 }
 
