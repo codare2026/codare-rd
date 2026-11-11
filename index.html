@@ -7,32 +7,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
 <script>
 // ── Supabase 設定 ──
-// ── OneSignal 推播 ──
-const OS_APP_ID = "d76da6d5-8058-40dc-acd5-cc6c5c55ec98";
-const OS_API_KEY = "os_v2_app_25w2nvmalbanzlgvzrwfyvpmtdemxnrvsvpukcemyq34xmr4gwbammw2wclrvpdobawlmkcvpkcjem2dykaflggiwzvysl77eflzura";
-
-async function sendPushToStudent(studentId, title, body) {
-  try {
-    const GET_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY };
-    const res = await fetch(`${SB_URL}/rest/v1/cd?key=eq.onesignal_${studentId}&select=value`, { headers: GET_HDRS });
-    if (!res.ok) return;
-    const rows = await res.json();
-    const playerId = rows[0]?.value?.playerId;
-    if (!playerId) return;
-    await fetch('https://api.onesignal.com/notifications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Key ${OS_API_KEY}` },
-      body: JSON.stringify({
-        app_id: OS_APP_ID,
-        include_subscription_ids: [playerId],
-        headings: { en: title, zh: title },
-        contents: { en: body, zh: body },
-        url: 'https://codare2026.github.io/codare-client/'
-      })
-    });
-  } catch(e) { console.warn('Push failed:', e.message); }
-}
-
 const SB_URL  = 'https://iqfnbwyjehwdbxptquyr.supabase.co';
 const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlxZm5id3lqZWh3ZGJ4cHRxdXlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODU5MjcsImV4cCI6MjA5MjM2MTkyN30.F5XSv6TKkJfek8bLmYsgvYgD7cnLGLirpNwC7SqbNDY';
 const SB_HDRS = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' };
@@ -823,14 +797,6 @@ body.sidebar-collapsed .main { margin-left: 0; }
   .more-menu { display: none !important; }
 }
 </style>
-  <!-- OneSignal Web Push -->
-  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-  <script>
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(async function(OneSignal) {
-      await OneSignal.init({ appId: "d76da6d5-8058-40dc-acd5-cc6c5c55ec98", notifyButton: { enable: false } });
-    });
-  </script>
 </head>
 <body>
 
@@ -1129,23 +1095,6 @@ async function doRdLogin() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('rd-loading-screen').style.display = 'none';
     launchRdApp();
-    // 儲存 RD 的 OneSignal player ID
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async (OneSignal) => {
-      try {
-        await OneSignal.Notifications.requestPermission();
-        const playerId = OneSignal.User.PushSubscription.id;
-        if (playerId) {
-          const key = 'onesignal_rd_' + id;
-          await fetch(`${SB_URL}/rest/v1/cd`, {
-            method: 'POST',
-            headers: { ...SB_HDRS, 'Prefer': 'resolution=merge-duplicates' },
-            body: JSON.stringify({ key, value: { playerId, rdId: id }, updated_at: new Date().toISOString() })
-          });
-        }
-      } catch(e) {}
-    });
-
   // 背景同步（登入後 600ms 執行，不阻擋 UI）
     setTimeout(async () => {
       try {
@@ -2822,8 +2771,6 @@ const overallCacheKey = `${studentId}_${day}_overall`;   const rdImgs = _rdPendi
   const ok = await sbWriteConfirmed(key, existing);
   if (ok) {
     showToast('✅ 總結回覆已送出並確認雲端儲存！');
-    const stuName = getActiveStudents().find(s => s.id === studentId)?.name || '學員';
-    sendPushToStudent(studentId, `💬 營養師回覆了你的飲食日記`, `${currentRD.name} 已回覆你 ${day} 的飲食紀錄，快去看看！`);
   } else {
     showToast('⚠️ 雲端儲存失敗，已存於本機，將自動重試');
   }
