@@ -1767,9 +1767,12 @@ function parsePortionText(rawText, _keepParens) {
         if (!(val >= 0) || val > 30) continue;
         let cat = null;
         // 1. 字母：C4、1P、P 3.5
-        let lm = after.match(/^\s*([CPVFDOcpvfdo])(?![A-Za-z])/);
+        // 「C2 P2 V1」字母在前、「2C 2P 1V」字母在後：看這句第一個數字前面有沒有字母來決定
+        const letterFirst = /^[^\d]*?(?:^|[^A-Za-z\d])[CPVFDOcpvfdo]\s*\d/.test(sub);
+        const lmA = after.match(/^\s*([CPVFDOcpvfdo])(?![A-Za-z])/);
+        const lmB = before.match(/(?:^|[^A-Za-z])([CPVFDOcpvfdo])\s*$/);
+        const lm = letterFirst ? (lmB || lmA) : (lmA || lmB);
         if (lm) cat = lm[1].toLowerCase();
-        if (!cat && (lm = before.match(/(?:^|[^A-Za-z])([CPVFDOcpvfdo])\s*$/))) cat = lm[1].toLowerCase();
         if (!cat && _pUnitAfter.test(after)) continue;
         // 2. 類別在數字前且緊接：蛋白質3份、碳水：2、蔬菜量至少2
         if (!cat) {
@@ -1844,19 +1847,69 @@ function parseSugarText(rawText) {
   return found ? Math.round(total * 10) / 10 : null;
 }
 
+// 熱量（大卡）：「約550大卡」「熱量：600」「650kcal」「500-600卡」
+// 同一則有好幾個熱量時：有「總計／這餐／整日／共…」的總結數字就用最後一個總結，否則全部加總（逐項列出的情況）
+const _kcalUnit = '(?:大卡|千卡|kcal|Kcal|KCAL|卡路里|卡(?![片關住通]))';
+const _kcalNum = '(\\d{1,2},\\d{3}|\\d+(?:\\.\\d+)?)(?:\\s*[-~～到至—]\\s*(\\d{1,2},\\d{3}|\\d+(?:\\.\\d+)?))?';
+const _kcalSkip = /建議|下次|目標|上限|不超過|不要超過|控制在|以內|以下|可以再|可以改|可以換|換成|改成|減少|需要|設定/;
+const _kcalSumWord = /總計|總熱量|合計|統計|小計|共|整餐|這餐|一餐|整日|整天|全天|全日|今日|今天|一天|總共|總和|總結|➡️|→|->|=>|=/;
+function parseCalText(rawText, _keepParens, _maxVal) {
+  let text = String(rawText || '').replace(/[０-９．，]/g, ch => ch === '．' ? '.' : ch === '，' ? '，' : String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  if (!_keepParens) text = text.replace(/（[^（）]*）|\([^()]*\)/g, '');
+  const maxVal = _maxVal || 3000;
+  const mentions = [];
+  text.split(/\n/).forEach(line => {
+    if (/^\s*今日份量估算[：:]/.test(line)) return; // 後台自動產生、貼進整日總結的那一行
+    const subRe = /[^，。！!？?；;]+/g; let sm;
+    while ((sm = subRe.exec(line))) {
+      const sub = sm[0];
+      if (_kcalSkip.test(sub)) continue;
+      const re = new RegExp(_kcalNum + '\\s*' + _kcalUnit + '|熱量\\s*(?:約莫|大約|約|估算?|粗估|為|是)?\\s*[：:]?\\s*(?:約莫|大約|約|估算?|粗估)?\\s*' + _kcalNum + '(?!\\s*[\\d.%％份g克])', 'g');
+      let m;
+      while ((m = re.exec(sub))) {
+        const a = m[1] !== undefined ? m[1] : m[3], b = m[1] !== undefined ? m[2] : m[4];
+        const num = x => parseFloat(String(x).replace(/,/g, ''));
+        const val = b ? (num(a) + num(b)) / 2 : num(a);
+        if (!(val >= 20) || val > maxVal) continue;
+        const before = line.slice(0, sm.index + m.index);
+        mentions.push({ val, summary: _pSummaryLine.test(before) || _kcalSumWord.test(before.slice(-12)) });
+      }
+    }
+  });
+  if (!mentions.length) {
+    if (!_keepParens && /[（(]/.test(rawText || '')) return parseCalText(rawText, true, _maxVal);
+    return null;
+  }
+  const sums = mentions.filter(x => x.summary);
+  const v = sums.length ? sums[sums.length - 1].val : mentions.reduce((t, x) => t + x.val, 0);
+  return Math.round(v);
+}
+// 整日總結裡寫的整天熱量（例：「今天總熱量約1650大卡」）→ 取最新一則
+function dayKcalFromOverall(food) {
+  if (!food) return null;
+  const arr = Array.isArray(food.rdFeedbacks) ? food.rdFeedbacks : (food.rdFeedback ? [{ text: food.rdFeedback, at: food.rdFeedbackAt }] : []);
+  const sorted = arr.filter(fb => fb && fb.text).sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
+  let k = null;
+  sorted.forEach(fb => { const v = parseCalText(fb.text, false, 8000); if (v !== null) k = v; });
+  return k;
+}
+
 function parseMealFeedbacks(fbArr) {
   const sorted = [...(fbArr || [])].filter(fb => fb && fb.text).sort((a, b) => new Date(a.at || 0) - new Date(b.at || 0));
-  let res = null, sugar = null;
+  let res = null, sugar = null, kcal = null;
   sorted.forEach(fb => {
     const p = parsePortionText(fb.text);
     if (Object.keys(p).length) res = { ...(res || {}), ...p };
     const g = parseSugarText(fb.text);
     if (g !== null) sugar = g;
+    const k = parseCalText(fb.text);
+    if (k !== null) kcal = k;
   });
-  if (!res && sugar === null) return null;
+  if (!res && sugar === null && kcal === null) return null;
   const full = {};
   PORTION_CATS.forEach(c => { full[c] = Math.round(((res || {})[c] || 0) * 100) / 100; });
   if (sugar !== null) full.sugar = sugar;
+  if (kcal !== null) full.kcal = kcal;
   return full;
 }
 
@@ -1875,7 +1928,7 @@ function estNum(n) {
   return String(v);
 }
 function fmtPortion(est) {
-  return PORTION_CATS.map(c => `${EST_LETTERS[c]} ${estNum(est?.[c])}`).join('｜') + (Number(est?.sugar) > 0 ? `｜添加糖 ${estNum(est.sugar)}g` : '');
+  return PORTION_CATS.map(c => `${EST_LETTERS[c]} ${estNum(est?.[c])}`).join('｜') + (Number(est?.sugar) > 0 ? `｜添加糖 ${estNum(est.sugar)}g` : '') + (Number(est?.kcal) > 0 ? `｜${Math.round(est.kcal)} 大卡` : '');
 }
 function parsePlanStr(str) {
   if (!str) return null;
@@ -1900,15 +1953,28 @@ function mealEstimate(studentId, day, food, mealKey) {
 }
 function dayEstimate(studentId, day, food) {
   const total = {}; PORTION_CATS.forEach(c => total[c] = 0);
-  let meals = 0, sugar = 0;
+  let meals = 0, sugar = 0, kcalSum = 0, kcalMeals = 0;
   EST_MEALS.forEach(m => {
     const r = mealEstimate(studentId, day, food, m.key);
     if (!r) return;
     meals++;
     PORTION_CATS.forEach(c => total[c] += Number(r.est[c]) || 0);
     sugar += Number(r.est.sugar) || 0;
+    if (Number(r.est.kcal) > 0) { kcalSum += Number(r.est.kcal); kcalMeals++; }
   });
-  return meals ? { total, meals, sugar: Math.round(sugar * 10) / 10 } : null;
+  // 整日總結有寫整天熱量 → 以營養師寫的為準；否則用各餐熱量加總
+  const ov = dayKcalFromOverall(food);
+  const kcal = ov !== null ? ov : (kcalMeals ? Math.round(kcalSum) : null);
+  const kcalSrc = ov !== null ? 'overall' : (kcalMeals ? 'meals' : null);
+  if (!meals && kcal === null) return null;
+  return { total, meals, sugar: Math.round(sugar * 10) / 10, kcal, kcalSrc, kcalMeals };
+}
+function kcalTargetForDay(s, day) {
+  const wg = buildWeekGroups(buildStudentDates(s.start, s.end));
+  const wi = wg.findIndex(g => g.dates.includes(day));
+  const plan = gs(`wplan_${s.id}_${wi >= 0 ? wi + 1 : 1}`) || {};
+  const n = parseInt(String(plan.calories || '').replace(/[^0-9]/g, ''), 10);
+  return n > 0 ? n : null;
 }
 function planForDay(s, day) {
   const wg = buildWeekGroups(buildStudentDates(s.start, s.end));
@@ -1936,7 +2002,7 @@ function renderMealEstRow(studentId, day, food, mealKey) {
       <span style="font-size:11px;font-weight:700;color:var(--g5)">營養師估算</span>
       ${est
         ? `<span style="font-size:12px;font-weight:700;color:var(--teal-dark);letter-spacing:0.3px">${fmtPortion(est)}</span>${badge}`
-        : `<span style="font-size:11px;color:var(--g4)">尚未判定（回覆裡寫到份數會自動帶入）</span>`}
+        : `<span style="font-size:11px;color:var(--g4)">尚未判定（回覆裡寫到份數、熱量會自動帶入）</span>`}
       <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 9px;margin-left:auto"
         onclick="document.getElementById('est-view-${mealKey}').style.display='none';document.getElementById('est-edit-${mealKey}').style.display='block'">✏️ ${est ? '調整' : '手動輸入'}</button>
     </div>
@@ -1949,6 +2015,12 @@ function renderMealEstRow(studentId, day, food, mealKey) {
             style="width:60px;padding:5px 4px;border:1.5px solid var(--g2);border-radius:6px;font-size:13px;text-align:center;font-family:inherit;outline:none"
             onfocus="this.style.borderColor='var(--teal)';this.select()" onblur="this.style.borderColor='var(--g2)'">
         </label>
+        <label style="display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:var(--g5);font-weight:700">
+          熱量<span style="font-weight:400;font-size:9px;color:var(--g4)">大卡</span>
+          <input id="est-${mealKey}-kcal" type="number" step="10" min="0" value="${est && est.kcal ? Math.round(est.kcal) : ''}" placeholder="0"
+            style="width:68px;padding:5px 4px;border:1.5px solid var(--g2);border-radius:6px;font-size:13px;text-align:center;font-family:inherit;outline:none"
+            onfocus="this.style.borderColor='var(--teal)';this.select()" onblur="this.style.borderColor='var(--g2)'">
+        </label>
       </div>
       <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap">
         ${r && r.manual ? `<button class="btn btn-outline btn-sm" style="font-size:11px;margin-right:auto" onclick="resetMealEst('${studentId}','${day}','${mealKey}')">↺ 還原自動判定</button>` : ''}
@@ -1959,11 +2031,18 @@ function renderMealEstRow(studentId, day, food, mealKey) {
 }
 
 const EST_NAMES = { c:'碳水', p:'蛋白質', v:'蔬菜', f:'水果', d:'乳品', o:'油脂' };
-function dayEstCopyText(r, plan) {
+function dayEstCopyText(r, plan, kcalTarget) {
   // 只列出有份數（或目標有設定）的類別，讀起來比較精簡
   const cats = PORTION_CATS.filter(c => (r.total[c] || 0) !== 0 || (plan && plan[c]));
   const part = vals => cats.map(c => `${EST_NAMES[c]} ${estNum(vals[c] || 0)}`).join('、');
-  return `今日份量估算：${part(r.total)}${r.sugar > 0 ? `、添加糖 ${estNum(r.sugar)} 克` : ''}${plan ? `（目標：${part(plan)}）` : ''}`;
+  const items = [];
+  if (r.meals && cats.length) items.push(part(r.total));
+  if (r.sugar > 0) items.push(`添加糖 ${estNum(r.sugar)} 克`);
+  if (r.kcal) items.push(`熱量約 ${r.kcal} 大卡`);
+  const tgt = [];
+  if (plan && cats.length) tgt.push(part(plan));
+  if (kcalTarget && r.kcal) tgt.push(`${kcalTarget} 大卡`);
+  return `今日份量估算：${items.join('、')}${tgt.length ? `（目標：${tgt.join('、')}）` : ''}`;
 }
 function copyDayEst() {
   const t = document.getElementById('day-est-copy-text')?.textContent || '';
@@ -1995,7 +2074,16 @@ function insertDayEstToOverall() {
 function renderDayEstTotal(s, day, food) {
   const r = dayEstimate(s.id, day, food);
   const plan = planForDay(s, day);
+  const kcalTarget = kcalTargetForDay(s, day);
   if (!r && !plan) return '';
+  let kcalLine = '';
+  if (r && r.kcal) {
+    const d = kcalTarget ? r.kcal - kcalTarget : null;
+    const dTxt = d === null ? '' : Math.abs(d) <= 50 ? '<span style="color:var(--g4)">（與目標相近）</span>'
+      : `<span style="font-weight:700;color:${d > 0 ? 'var(--amber)' : 'var(--blue)'}">（${d > 0 ? '+' : ''}${d}）</span>`;
+    const src = r.kcalSrc === 'overall' ? '整日總結填寫' : `${r.kcalMeals} 餐加總`;
+    kcalLine = `<div style="margin-top:8px;font-size:13px;color:var(--g7)">🔥 熱量：<b style="color:var(--teal-dark);font-size:15px">${r.kcal} 大卡</b>${kcalTarget ? `<span style="color:var(--g5)"> ／ 目標 ${kcalTarget} 大卡</span> ${dTxt}` : ''}<span style="font-size:11px;color:var(--g4);margin-left:6px">（${src}）</span></div>`;
+  }
   const cell = (content, extra = '') => `<td style="padding:6px 4px;text-align:center;${extra}">${content}</td>`;
   const head = PORTION_CATS.map(c => `<th style="padding:4px;font-size:11px;color:var(--g5);font-weight:700">${EST_LETTERS[c]}<div style="font-weight:400;font-size:10px;color:var(--g4)">${PORTION_LABELS[c]}</div></th>`).join('');
   const rowOf = (label, vals, style) => `<tr>${cell(label, 'text-align:left;font-size:11px;color:var(--g5);white-space:nowrap')}${PORTION_CATS.map(c => cell(vals ? estNum(vals[c]) : '–', style)).join('')}</tr>`;
@@ -2020,9 +2108,10 @@ function renderDayEstTotal(s, day, food) {
           </tbody>
         </table>
       </div>
+      ${kcalLine}
       ${r && r.sugar > 0 ? `<div style="margin-top:8px;font-size:13px;color:var(--g7)">🍬 添加糖：<b style="color:var(--amber)">${estNum(r.sugar)} 克</b><span style="font-size:11px;color:var(--g4);margin-left:6px">（各餐加總）</span></div>` : ''}
       ${r ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:8px 10px;background:var(--g0);border-radius:8px">
-        <div id="day-est-copy-text" style="flex:1;min-width:200px;font-size:13px;color:var(--g7);line-height:1.6;user-select:all">${dayEstCopyText(r, plan)}</div>
+        <div id="day-est-copy-text" style="flex:1;min-width:200px;font-size:13px;color:var(--g7);line-height:1.6;user-select:all">${dayEstCopyText(r, plan, kcalTarget)}</div>
         <button class="btn btn-outline btn-sm" style="font-size:11px" onclick="copyDayEst()">📋 複製</button>
         <button class="btn btn-teal btn-sm" style="font-size:11px" onclick="insertDayEstToOverall()">放進整日總結</button>
       </div>` : ''}
@@ -2049,6 +2138,8 @@ async function saveMealEst(studentId, day, mealKey) {
   });
   const sg = parseFloat(document.getElementById(`est-${mealKey}-sugar`)?.value);
   if (!isNaN(sg) && sg > 0) val.sugar = Math.round(sg * 10) / 10;
+  const kc = parseFloat(document.getElementById(`est-${mealKey}-kcal`)?.value);
+  if (!isNaN(kc) && kc > 0) val.kcal = Math.round(kc);
   const key = `rdest_${studentId}`;
   const all = (await refreshKeyFromServer(key)) || {};
   all[day] = { ...(all[day] || {}), [mealKey]: { ...val, at: new Date().toISOString(), by: currentRD?.id || '' } };
@@ -2092,7 +2183,7 @@ function renderPortionAvgCard(s) {
   return `
   <div class="card">
     <div class="card-title">🥗 份數平均</div>
-    <div style="font-size:12px;color:var(--g5);margin-bottom:12px;line-height:1.6">依營養師每天估算的份數，算出這段期間六大類食物的平均攝取。沒有估算資料的日子不列入平均。</div>
+    <div style="font-size:12px;color:var(--g5);margin-bottom:12px;line-height:1.6">依營養師每天估算的份數與熱量，算出這段期間六大類食物與熱量的平均攝取。沒有估算資料的日子不列入平均。</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <input id="pa-start" type="date" value="${toDateInput(first)}" min="${toDateInput(first)}" max="${toDateInput(last)}"
         style="padding:7px 10px;border:1.5px solid var(--g2);border-radius:8px;font-family:inherit;font-size:13px">
@@ -2120,14 +2211,19 @@ async function calcPortionAvg(studentId) {
   const inRange = studentDateObjs(s).filter(x => x.date >= from && x.date <= to);
   const rows = [], sum = {}, planSum = {};
   PORTION_CATS.forEach(c => { sum[c] = 0; planSum[c] = 0; });
-  let planDays = 0, sugarSum = 0;
+  let planDays = 0, sugarSum = 0, kcalSum = 0, kcalDays = 0, kcalTgtSum = 0, kcalTgtDays = 0;
   inRange.forEach(x => {
     const food = gs(`food_${s.id}_${x.key}`);
     const r = dayEstimate(s.id, x.key, food);
     if (!r) return;
-    rows.push({ key: x.key, total: r.total, meals: r.meals, sugar: r.sugar });
+    rows.push({ key: x.key, total: r.total, meals: r.meals, sugar: r.sugar, kcal: r.kcal });
     PORTION_CATS.forEach(c => sum[c] += r.total[c]);
     sugarSum += r.sugar || 0;
+    if (r.kcal) {
+      kcalSum += r.kcal; kcalDays++;
+      const kt = kcalTargetForDay(s, x.key);
+      if (kt) { kcalTgtSum += kt; kcalTgtDays++; }
+    }
     const plan = planForDay(s, x.key);
     if (plan) { planDays++; PORTION_CATS.forEach(c => planSum[c] += plan[c]); }
   });
@@ -2153,6 +2249,7 @@ async function calcPortionAvg(studentId) {
       <td style="padding:5px 6px;font-size:12px;color:var(--g6);white-space:nowrap">${x.key}<span style="color:var(--g4);font-size:10px">（${x.meals} 餐）</span></td>
       ${PORTION_CATS.map(c => `<td style="padding:5px 4px;text-align:center;font-size:12px">${estNum(x.total[c])}</td>`).join('')}
       <td style="padding:5px 4px;text-align:center;font-size:12px;color:var(--amber)">${x.sugar ? estNum(x.sugar) : '–'}</td>
+      <td style="padding:5px 4px;text-align:center;font-size:12px;color:var(--teal-dark)">${x.kcal || '–'}</td>
     </tr>`).join('');
   out.innerHTML = `
     <div style="font-size:12px;color:var(--g5);margin-bottom:8px">${sv.replace(/-/g, '/')} ～ ${ev.replace(/-/g, '/')}：共 ${inRange.length} 天，列入平均 <b style="color:var(--teal-dark)">${n} 天</b>${inRange.length > n ? `（${inRange.length - n} 天沒有估算資料）` : ''}</div>
@@ -2165,13 +2262,17 @@ async function calcPortionAvg(studentId) {
         <tbody>${tableRows}</tbody>
       </table>
     </div>
+    ${kcalDays ? (() => {
+      const ka = Math.round(kcalSum / kcalDays), kt = kcalTgtDays ? Math.round(kcalTgtSum / kcalTgtDays) : null, d = kt ? ka - kt : null;
+      return `<div style="margin-top:10px;font-size:13px;color:var(--g7)">🔥 熱量：每日平均 <b style="color:var(--teal-dark);font-size:15px">${ka} 大卡</b>${kt ? `<span style="color:var(--g5)"> ／ 平均目標 ${kt} 大卡</span> ${Math.abs(d) <= 50 ? '<span style="color:var(--g4)">（相近）</span>' : `<span style="font-weight:700;color:${d > 0 ? 'var(--amber)' : 'var(--blue)'}">（${d > 0 ? '+' : ''}${d}）</span>`}` : ''}<span style="font-size:11px;color:var(--g4);margin-left:6px">（有填熱量的 ${kcalDays} 天平均）</span></div>`;
+    })() : ''}
     ${sugarSum > 0 ? `<div style="margin-top:8px;font-size:13px;color:var(--g7)">🍬 添加糖：每日平均 <b style="color:var(--amber)">${r1(sugarSum / n)} 克</b><span style="font-size:11px;color:var(--g4);margin-left:6px">（${n} 天合計 ${estNum(Math.round(sugarSum * 10) / 10)} 克）</span></div>` : ''}
     ${planAvg ? `<div style="font-size:11px;color:var(--g4);margin-top:6px">差異：<span style="color:var(--amber)">＋ 高於目標</span>　<span style="color:var(--blue)">－ 低於目標</span>　— 差距在 0.5 份以內</div>` : ''}
     <details style="margin-top:12px">
       <summary style="cursor:pointer;font-size:12px;color:var(--teal);font-weight:700">查看每日明細</summary>
       <div style="overflow-x:auto;margin-top:8px">
         <table style="width:100%;border-collapse:collapse;min-width:360px">
-          <thead><tr style="font-size:11px;color:var(--g5)"><th style="text-align:left;padding:4px 6px">日期</th>${PORTION_CATS.map(c => `<th style="padding:4px">${EST_LETTERS[c]}</th>`).join('')}<th style="padding:4px">糖(g)</th></tr></thead>
+          <thead><tr style="font-size:11px;color:var(--g5)"><th style="text-align:left;padding:4px 6px">日期</th>${PORTION_CATS.map(c => `<th style="padding:4px">${EST_LETTERS[c]}</th>`).join('')}<th style="padding:4px">糖(g)</th><th style="padding:4px">大卡</th></tr></thead>
           <tbody>${dayRows}</tbody>
         </table>
       </div>
